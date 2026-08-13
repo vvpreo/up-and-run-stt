@@ -17,7 +17,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: gigaam-stt:cpu
+    image: gigaam-stt:latest
     container_name: gigaam-stt
     # Bind to 0.0.0.0 so the service is reachable from the Mac host (VoiceInk),
     # other containers (dev-nginx) and internal services.

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def create_asr_model(model_name: str | None = None) -> "ASRModel":
     """
-    Создаёт экземпляр GigaAM ASR модели.
+    Создаёт экземпляр GigaAM ASR модели (бэкенд — INFERENCE_BACKEND).
 
     Args:
         model_name: Вариант модели GigaAM (v3_e2e_ctc, ...); None = дефолт.
@@ -25,7 +25,16 @@ def create_asr_model(model_name: str | None = None) -> "ASRModel":
     Returns:
         ASRModel: Экземпляр GigaAM ASR модели.
     """
-    logger.info(f"Creating GigaAM ASR model ({model_name or 'default'})")
+    from src.config import INFERENCE_BACKEND
+
+    logger.info(
+        f"Creating GigaAM ASR model ({model_name or 'default'}, backend={INFERENCE_BACKEND})"
+    )
+
+    if INFERENCE_BACKEND == "onnx":
+        from src.asr.onnx_engine import GigaAMOnnxASR
+
+        return GigaAMOnnxASR(model_name=model_name)
 
     from src.asr.gigaam import GigaAMASR
 

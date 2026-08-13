@@ -14,7 +14,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-IMAGE="${1:-gigaam-stt:cpu}"
+IMAGE="${1:-gigaam-stt:latest}"
 docker build -f Dockerfile -t "$IMAGE" .
 echo "Built: $IMAGE"
 

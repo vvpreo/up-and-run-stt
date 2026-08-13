@@ -1,5 +1,7 @@
 # TODO
 
+- [ ] [Переезд на ONNX Runtime: engine, эмоции, Dockerfile без torch, хостинг весов](docs/plans/public-image-roadmap.md) — совместимость таймстемпов и эмоций подтверждена экспериментально, фичерайзер готов
+
 # PLANNED
 
 # TO REVIEW

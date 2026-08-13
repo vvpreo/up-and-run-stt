@@ -41,8 +41,11 @@ docker run -d --name gigaam-stt -p 9007:9007 \
 ```
 
 Значения по умолчанию всех переменных зашиты в образ (ENV в `Dockerfile`),
-так что для старта достаточно проброса порта и тома под веса. Образ — ~1.8 ГБ
-(основной вес — CPU-сборка PyTorch); веса моделей в образ не входят.
+так что для старта достаточно проброса порта и тома под веса. Образ — **~0.7 ГБ**
+(инференс на ONNX Runtime, без PyTorch); веса моделей в образ не входят —
+скачиваются при первом старте с [vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx)
+(зеркало официальных весов, конвертация — `scripts/convert_onnx.py`).
+PyTorch-вариант для конвертации весов и сверки качества — `Dockerfile.torch`.
 
 Проверка готовности:
 
@@ -224,11 +227,12 @@ curl -s "http://localhost:9007/gigaam/asr?model=v3_e2e_rnnt&output=json" \
 (`MODEL_CACHE_DIR`). Скачиваются один раз при первом использовании модели и
 переживают рестарты и пересборки образа.
 
-- Внутри контейнера: `/app/data/gigaam/<model>.ckpt` (+ `<model>_tokenizer.model`).
-- Источник весов: CDN SberDevices (`cdn.chatwm.opensmodel.sberdevices.ru`),
-  обычный HTTPS, без HF-токена.
-- Размер: каждый чекпойнт `v3_*` ≈ 420 МБ (+ токенизатор ~250 КБ); скачанные
-  ранее варианты остаются в томе (три штуки ≈ 1.3 ГБ).
+- Внутри контейнера: `/app/data/onnx/<model>.onnx` (+ `.yaml`); токенизаторы
+  e2e-моделей — `/app/data/gigaam/<model>_tokenizer.model`.
+- Источник весов: HF Hub [vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx)
+  (переопределяется `GIGAAM_ONNX_BASE_URL`); токенизаторы — CDN SberDevices.
+  Всё обычным HTTPS, без токенов.
+- Размер: fp32-модель ≈ 845 МБ (int8-варианты ≈ 215 МБ — `GIGAAM_ONNX_VARIANT=.int8`).
 
 Посмотреть содержимое тома:
 

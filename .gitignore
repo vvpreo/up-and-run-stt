@@ -15,4 +15,4 @@ bench_results
 .venv/
 benchmark/dataset/
 benchmark/results/
-.claude
+.claude.hf_token
