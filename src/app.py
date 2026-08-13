@@ -172,7 +172,13 @@ def create_app() -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
-        return FileResponse(index_html, media_type="text/html")
+        # no-cache: браузер обязан ревалидировать страницу (иначе после
+        # обновлений сервиса пользователи видят закэшированный старый UI)
+        return FileResponse(
+            index_html,
+            media_type="text/html",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     return app
 

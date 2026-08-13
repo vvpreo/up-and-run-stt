@@ -30,6 +30,7 @@ from src.config import (
     GIGAAM_MIN_CHUNK_SEC,
     MODEL_CACHE_DIR,
     SAMPLE_RATE,
+    STREAM_CHUNK_SEC,
     VAD_CHUNKING,
 )
 from src.models.schemas import Segment, TranscriptionResponse, WordTimestamp
@@ -309,9 +310,9 @@ class GigaAMOnnxASR(ASRModel):
                 h, c = ho, co
         return token_ids, token_frames, t_max
 
-    def _chunk_bounds(self, num_samples: int) -> List[Tuple[int, int]]:
+    def _chunk_bounds(self, num_samples: int, chunk_sec: Optional[float] = None) -> List[Tuple[int, int]]:
         """Жёсткие границы чанков (хвост < min сливается с предыдущим)."""
-        chunk = int(GIGAAM_CHUNK_SEC * SAMPLE_RATE)
+        chunk = int((chunk_sec or GIGAAM_CHUNK_SEC) * SAMPLE_RATE)
         min_chunk = int(GIGAAM_MIN_CHUNK_SEC * SAMPLE_RATE)
         bounds: List[Tuple[int, int]] = []
         pos = 0
@@ -324,7 +325,9 @@ class GigaAMOnnxASR(ASRModel):
             pos = end
         return bounds
 
-    def _chunk_bounds_vad(self, audio: np.ndarray) -> Optional[List[Tuple[int, int]]]:
+    def _chunk_bounds_vad(
+        self, audio: np.ndarray, chunk_sec: Optional[float] = None
+    ) -> Optional[List[Tuple[int, int]]]:
         """
         Границы чанков по паузам речи (silero-vad).
 
@@ -346,7 +349,7 @@ class GigaAMOnnxASR(ASRModel):
         if not regions:
             return []
 
-        chunk_max = int(GIGAAM_CHUNK_SEC * SAMPLE_RATE)
+        chunk_max = int((chunk_sec or GIGAAM_CHUNK_SEC) * SAMPLE_RATE)
         min_chunk = int(GIGAAM_MIN_CHUNK_SEC * SAMPLE_RATE)
 
         # Группируем речевые участки в чанки до chunk_max по общему охвату
@@ -434,10 +437,101 @@ class GigaAMOnnxASR(ASRModel):
             return full_text
 
         resp = TranscriptionResponse(text=full_text, language=language or "ru")
+        return self._finalize_response(resp, segments, duration)
+
+    def _finalize_response(
+        self, resp: TranscriptionResponse, segments: List[Segment], duration: float
+    ) -> TranscriptionResponse:
         # Сегменты прикладываем всегда (даже один): из них собираются
         # srt/vtt/tsv и verbose_json — без сегментов субтитры пустые.
         if segments:
             resp.segments = segments
         if duration > 0:
-            resp.chars_per_second = round(len(full_text) / duration, 4)
+            resp.chars_per_second = round(len(resp.text) / duration, 4)
         return resp
+
+    # ------------------------------------------------------------- streaming
+
+    def _stream_bounds_vad(self, audio: np.ndarray) -> Optional[List[Tuple[int, int]]]:
+        """
+        Пофразные границы для стриминга: каждый речевой участок VAD (фраза,
+        ограниченная паузами >= min_silence) — отдельный чанк, уходит в модель
+        и отдаётся немедленно. Непрерывная речь длиннее STREAM_CHUNK_SEC
+        дорезается жёстко. None — VAD недоступен (фолбэк на жёсткую нарезку).
+        """
+        from src.asr.vad import silero_vad
+
+        if not silero_vad.available():
+            return None
+
+        regions = silero_vad.speech_regions(audio)
+        if not regions:
+            return []
+
+        limit = int(STREAM_CHUNK_SEC * SAMPLE_RATE)
+        bounds: List[Tuple[int, int]] = []
+        for s, e in regions:
+            if e - s <= limit:
+                bounds.append((s, e))
+                continue
+            pos = s
+            while pos < e:
+                bounds.append((pos, min(pos + limit, e)))
+                pos += limit
+        return bounds
+
+    def transcribe_stream(
+        self,
+        audio: np.ndarray,
+        language: Optional[str] = None,
+        word_timestamps: bool = False,
+        options: Optional[dict] = None,
+        cancel=None,
+    ):
+        """
+        Генератор: транскрибирует аудио почанково и отдаёт результат по мере
+        готовности каждого чанка (для SSE-стриминга).
+
+        Чанки мельче обычного (STREAM_CHUNK_SEC, дефолт 12 с) — первое
+        событие приходит раньше. `cancel` — threading.Event: проверяется
+        между чанками, позволяет прервать работу при разрыве соединения.
+
+        Yields:
+            dict: {"text", "start", "end", "words": [WordTimestamp] | None}
+        """
+        self.update_activity()
+        self.ensure_model_loaded()
+
+        audio = np.asarray(audio, dtype=np.float32)
+        use_vad = VAD_CHUNKING
+        if options and options.get("vad") is not None:
+            use_vad = bool(options["vad"])
+
+        with self.model_lock:
+            bounds = self._stream_bounds_vad(audio) if use_vad else None
+            if bounds is None:
+                if len(audio) / SAMPLE_RATE > STREAM_CHUNK_SEC:
+                    bounds = self._chunk_bounds(len(audio), chunk_sec=STREAM_CHUNK_SEC)
+                else:
+                    bounds = [(0, len(audio))]
+
+            for start, end in bounds:
+                if cancel is not None and cancel.is_set():
+                    logger.info("Streaming transcription cancelled by client")
+                    return
+                offset = start / SAMPLE_RATE
+                text, token_ids, token_frames, frame_shift = self._infer_chunk(
+                    audio[start:end]
+                )
+                if not text.strip():
+                    continue
+                yield {
+                    "text": text.strip(),
+                    "start": round(offset, 3),
+                    "end": round(end / SAMPLE_RATE, 3),
+                    "words": _group_words(
+                        self.tokenizer, token_ids, token_frames, frame_shift, offset
+                    )
+                    if word_timestamps
+                    else None,
+                }

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from fastapi import APIRouter
 
+from src import __version__
 from src.asr.registry import list_models
 from src.asr.vad import silero_vad
 from src.config import AUTH_TOKEN, DEFAULT_MODEL, ENABLE_DOCS, ENGINE, TIMEOUT_ENABLED, VAD_CHUNKING
@@ -92,6 +93,7 @@ async def health_check() -> dict:
 
     return {
         "status": "healthy",
+        "version": __version__,
         "model_loaded": _asr_model is not None and _asr_model.is_loaded(),
         "engine": ENGINE,
         # Набор моделей инстанса и их состояние; выбор — полем `model` запроса

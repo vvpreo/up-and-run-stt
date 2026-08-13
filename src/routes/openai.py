@@ -12,10 +12,82 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 import asyncio
+import json as _json
+import threading
 
 from src.asr.registry import resolve_model
 from src.auth import verify_token
 from src.services.limits import read_upload_limited, request_slot
+
+
+def _sse_streaming_response(selected_model, audio_content: bytes, language, vad_override):
+    """
+    SSE-стриминг транскрипции: инференс почанково в worker-треде, события
+    в формате OpenAI. Слот очереди держится на всё время стрима; разрыв
+    соединения отменяет инференс (cancel-event проверяется между чанками).
+    """
+    from fastapi.responses import StreamingResponse
+
+    from src.config import SAMPLE_RATE
+    from src.utils.audio import load_audio_from_file
+
+    # 429 при переполнении — ДО начала ответа
+    slot = request_slot()
+    slot.__enter__()
+
+    def sse(obj) -> str:
+        return f"data: {_json.dumps(obj, ensure_ascii=False)}\n\n"
+
+    async def event_gen():
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        cancel = threading.Event()
+        parts: list[str] = []
+        try:
+            audio_data = await asyncio.to_thread(load_audio_from_file, audio_content)
+            duration = len(audio_data) / SAMPLE_RATE
+            opts = {"vad": vad_override} if vad_override is not None else None
+
+            def worker():
+                gen = selected_model.transcribe_stream(
+                    audio_data, language=language, options=opts, cancel=cancel
+                )
+                try:
+                    for part in gen:
+                        loop.call_soon_threadsafe(queue.put_nowait, ("delta", part))
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"[SSE] streaming transcription failed: {e}", exc_info=True)
+                    loop.call_soon_threadsafe(queue.put_nowait, ("error", str(e)))
+                finally:
+                    gen.close()
+                    loop.call_soon_threadsafe(queue.put_nowait, ("end", None))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+            while True:
+                kind, payload = await queue.get()
+                if kind == "delta":
+                    parts.append(payload["text"])
+                    yield sse({"type": "transcript.text.delta", "delta": payload["text"] + " "})
+                elif kind == "error":
+                    yield sse({"type": "error", "error": {"message": payload, "type": "server_error"}})
+                    return
+                else:
+                    yield sse({
+                        "type": "transcript.text.done",
+                        "text": " ".join(parts).strip(),
+                        "usage": {"type": "duration", "seconds": round(duration, 2)},
+                    })
+                    return
+        finally:
+            cancel.set()  # разрыв соединения/выход — остановить инференс
+            slot.__exit__(None, None, None)
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 from src.config import (
     SAMPLE_RATE,
@@ -125,14 +197,22 @@ async def openai_transcribe(
     """
     # Объединяем оба wire-имени поля таймстемпов (с [] и без)
     timestamp_granularities = timestamp_granularities or timestamp_granularities_bracket
-    if stream:
-        logger.warning("stream=true requested but SSE streaming is not supported; returning full response")
 
     # chunking_strategy: "auto" -> VAD-чанкование, "none"/"fixed" -> жёсткие
     # границы, отсутствует -> серверный дефолт (VAD_CHUNKING)
     vad_override = None
     if chunking_strategy:
         vad_override = chunking_strategy.strip().lower() not in ("none", "fixed", "off")
+
+    # SSE-стриминг: события transcript.text.delta / .done, как у OpenAI
+    if stream:
+        audio_content = await read_upload_limited(file)
+        return _sse_streaming_response(
+            resolve_model(model),
+            audio_content,
+            language or DEFAULT_LANGUAGE,
+            vad_override,
+        )
 
     # Выбор модели по полю `model` запроса (реестр моделей инстанса);
     # 'whisper-1' и незнакомые имена -> модель по умолчанию.

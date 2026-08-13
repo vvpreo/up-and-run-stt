@@ -60,6 +60,10 @@ VAD_CHUNKING = os.getenv("VAD_CHUNKING", "true").lower() == "true"
 GIGAAM_CHUNK_SEC = int(os.getenv("GIGAAM_CHUNK_SEC", "30"))
 GIGAAM_MIN_CHUNK_SEC = int(os.getenv("GIGAAM_MIN_CHUNK_SEC", "5"))
 
+# Целевой размер чанка в SSE-стриминге, сек: меньше чанк — раньше первое
+# событие, но чуть больше суммарного оверхеда на вызовы модели.
+STREAM_CHUNK_SEC = int(os.getenv("STREAM_CHUNK_SEC", "12"))
+
 # Device to use: "auto", "cuda", "cpu", "mps"
 DEVICE = os.getenv("DEVICE", "auto")
 

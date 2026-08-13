@@ -101,6 +101,21 @@
   .emo-row.dominant .emo-fill { background: var(--ok); }
   .seg-line { color: var(--muted); font-size: 12.5px; margin: 3px 0; }
   .seg-line b { color: var(--text); font-weight: 500; }
+
+  /* живой лог SSE-событий */
+  .stream-log {
+    background: #0c1015; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; margin-top: 10px; max-height: 190px; overflow-y: auto;
+    font-family: ui-monospace, monospace; font-size: 12px;
+  }
+  .log-line { display: flex; gap: 8px; padding: 2px 0; align-items: baseline; animation: fadein .25s; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; } }
+  .log-t { color: var(--muted); min-width: 52px; text-align: right; flex-shrink: 0; }
+  .log-type { flex-shrink: 0; font-weight: 600; padding: 0 6px; border-radius: 5px; font-size: 11px; }
+  .log-type.delta { color: var(--accent); background: #4da3ff1a; }
+  .log-type.done { color: var(--ok); background: #3ecf8e1a; }
+  .log-type.err { color: var(--err); background: #ff6b6b1a; }
+  .log-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -150,6 +165,7 @@
       <label class="toggle"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
       <label class="toggle" id="emoWrap" hidden><input type="checkbox" id="emoOn"> Эмоции</label>
       <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается"><input type="checkbox" id="vadOn"> VAD-чанкование</label>
+      <label class="toggle" id="streamWrap" title="SSE: текст приходит по мере распознавания чанков (события OpenAI transcript.text.delta)"><input type="checkbox" id="streamOn"> Стриминг</label>
     </div>
     <div class="hint" id="fmtHint"></div>
   </div>
@@ -181,6 +197,9 @@
 'use strict';
 
 /* =============================== state =============================== */
+// Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
+// не показывает ли браузер закэшированную старую страницу.
+const UI_BUILD = 'live-mic-2';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -256,7 +275,7 @@ function renderHealth() {
   $('healthText').textContent = ok ? 'сервис готов' : (h ? 'модель не загружена' : 'недоступен');
   if (h) {
     $('healthDetail').textContent =
-      `engine: ${h.engine} · модели: ${Object.keys(h.models || {}).join(', ')} · ` +
+      `v${h.version || '?'} · UI ${UI_BUILD} · engine: ${h.engine} · модели: ${Object.keys(h.models || {}).join(', ')} · ` +
       `RAM: ${Math.round(h.memory?.process_memory_mb ?? 0)} МБ · очередь: ${h.pending_requests ?? 0}`;
     $('emoWrap').hidden = !h.emotions_enabled;
     $('docsLinks').hidden = !h.docs_enabled;
@@ -294,6 +313,7 @@ function fillFormats() {
   const ep = $('endpoint').value;
   $('format').innerHTML = FORMATS[ep].map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
   $('langWrap').hidden = ep !== 'native';
+  $('streamWrap').hidden = ep !== 'openai';
   updateHint();
 }
 $('endpoint').addEventListener('change', fillFormats);
@@ -307,8 +327,11 @@ function updateHint() {
     hint = 'Слова в OpenAI-контракте возвращаются только в формате verbose_json.';
   if (ep === 'native' && wts && fmt !== 'json')
     hint = 'Слова в нативном контракте возвращаются только в формате json.';
+  if (ep === 'openai' && $('streamOn').checked)
+    hint = 'Стриминг: текст приходит дельтами (формат/слова не применяются).';
   $('fmtHint').textContent = hint;
 }
+$('streamOn').addEventListener('change', updateHint);
 
 /* ========================== запись микрофона ========================= */
 let rec = null;
@@ -317,35 +340,159 @@ $('recBtn').addEventListener('click', () => rec ? stopRecording() : startRecordi
 
 async function startRecording() {
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  try {
+    // Без AGC/шумодава: авто-усиление поднимает тишину до уровня речи и
+    // ломает детекцию пауз (а нам нужен сырой сигнал для VAD)
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { autoGainControl: false, noiseSuppression: false, echoCancellation: true },
+    });
+  }
   catch (e) { $('recStatus').textContent = 'нет доступа к микрофону: ' + e.message; return; }
   const ctx = new AudioContext();
   const src = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const chunks = [];
-  node.onaudioprocess = ev => chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
-  src.connect(node); node.connect(ctx.destination);
-  rec = { ctx, stream, node, src, chunks, sampleRate: ctx.sampleRate, startedAt: Date.now() };
+
+  // Живая диктовка: при включённом «Стриминге» фразы отправляются на сервер
+  // ПРЯМО ВО ВРЕМЯ записи (детекция пауз по RMS на клиенте), текст появляется
+  // до нажатия «Стоп».
+  const live = $('streamOn').checked && !$('streamWrap').hidden;
+
+  rec = {
+    ctx, stream, node, src, chunks, sampleRate: ctx.sampleRate, startedAt: Date.now(),
+    live, phrase: [], silenceMs: 0, sawSpeech: false,
+    chain: Promise.resolve(), parts: [], card: null, textEl: null, logEl: null,
+  };
+
+  if (live) {
+    const empty = document.querySelector('#results .empty');
+    if (empty) empty.remove();
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="status" id="live-mic"><span class="spin"></span>живая диктовка — говорите, текст появится по фразам…</div>
+      <div class="result-text" style="min-height:52px"></div>
+      <div class="stream-log"></div>
+      <div class="meta"></div>`;
+    $('results').prepend(card);
+    rec.card = card;
+    rec.textEl = card.querySelector('.result-text');
+    rec.logEl = card.querySelector('.stream-log');
+  }
+
+  node.onaudioprocess = ev => {
+    const frame = new Float32Array(ev.inputBuffer.getChannelData(0));
+    chunks.push(frame);
+    if (rec && rec.live) liveFeed(frame);
+  };
+  // node должен быть подключён к графу, чтобы срабатывать, но слышать себя
+  // в колонках не нужно — глушим нулевым gain'ом
+  const mute = ctx.createGain(); mute.gain.value = 0;
+  src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+
   rec.timerId = setInterval(() => {
     const s = Math.floor((Date.now() - rec.startedAt) / 1000);
     $('timer').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }, 250);
-  $('recBtn').textContent = '⏹ Стоп и распознать'; $('recBtn').className = 'rec-on';
-  $('timer').hidden = false; $('timer').textContent = '0:00'; $('recStatus').textContent = 'запись…';
+  $('recBtn').textContent = '⏹ Стоп'; $('recBtn').className = 'rec-on';
+  $('timer').hidden = false; $('timer').textContent = '0:00';
+  $('recStatus').textContent = live ? 'запись (live)…' : 'запись…';
+}
+
+/* --- клиентская детекция пауз: фраза уходит на сервер сразу --- */
+const LIVE_SILENCE_MS = 550;   // пауза, закрывающая фразу
+
+function liveFeed(frame) {
+  rec.phrase.push(frame);
+  let sum = 0;
+  for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
+  const rms = Math.sqrt(sum / frame.length);
+  const frameMs = frame.length / rec.sampleRate * 1000;
+
+  // Адаптивный порог: следим за шумовым полом (быстро падает на тихих
+  // кадрах, медленно ползёт вверх) — работает и с AGC, и без него
+  if (rec.noiseFloor === undefined) rec.noiseFloor = 0.02;
+  rec.noiseFloor = rms < rec.noiseFloor ? rms : rec.noiseFloor * 1.01;
+  const thr = Math.max(rec.noiseFloor * 3, 0.0025);
+
+  if (rms < thr) rec.silenceMs += frameMs;
+  else { rec.silenceMs = 0; rec.sawSpeech = true; }
+  // телеметрия для отладки живого режима (читается из консоли)
+  window.__liveDebug = { rms: +rms.toFixed(5), thr: +thr.toFixed(5), silenceMs: Math.round(rec.silenceMs), sawSpeech: rec.sawSpeech };
+
+  const bufMs = rec.phrase.reduce((n, c) => n + c.length, 0) / rec.sampleRate * 1000;
+  if (rec.sawSpeech && rec.silenceMs >= LIVE_SILENCE_MS && bufMs - rec.silenceMs >= 350) {
+    flushPhrase();
+  } else if (!rec.sawSpeech && bufMs > 4000) {
+    rec.phrase = [frame];               // копим тишину зря — сбрасываем буфер
+  } else if (bufMs >= 15000) {
+    flushPhrase();                      // страховка: очень длинная фраза
+  }
+}
+
+function flushPhrase() {
+  const phrase = rec.phrase;
+  rec.phrase = []; rec.silenceMs = 0; rec.sawSpeech = false;
+
+  const total = phrase.reduce((n, c) => n + c.length, 0);
+  if (total / rec.sampleRate < 0.35) return;
+  const pcm = new Float32Array(total);
+  let off = 0; for (const c of phrase) { pcm.set(c, off); off += c.length; }
+  const wav = encodeWav(downsample(pcm, rec.sampleRate, 16000), 16000);
+  const blob = new Blob([wav], { type: 'audio/wav' });
+  const t = ((Date.now() - rec.startedAt) / 1000).toFixed(2);
+  const { textEl, logEl, parts } = rec;   // рефы живут дольше rec
+
+  rec.chain = rec.chain.then(async () => {
+    const fd = new FormData();
+    fd.append('file', blob, 'phrase.wav');
+    fd.append('response_format', 'json');
+    const mdl = $('model').value;
+    if (mdl) fd.append('model', mdl);
+    const r = await fetch('/v1/audio/transcriptions', { method: 'POST', body: fd, headers: authHeaders() });
+    if (r.status === 401) { showGate('Сессия истекла — введите токен заново'); return; }
+    const j = await r.json().catch(() => ({}));
+    const text = (j.text || '').trim();
+    if (!text) return;
+    parts.push(text);
+    textEl.textContent = parts.join(' ');
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = `<span class="log-t">${t} с</span><span class="log-type delta">фраза</span><span class="log-text">${esc(text)}</span>`;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }).catch(() => {});
 }
 
 function stopRecording() {
-  const { ctx, stream, node, src, chunks, sampleRate, timerId } = rec;
+  const { ctx, stream, node, src, chunks, sampleRate, timerId, live } = rec;
+  const finished = rec;
   clearInterval(timerId); node.disconnect(); src.disconnect();
-  stream.getTracks().forEach(t => t.stop()); ctx.close(); rec = null;
+  stream.getTracks().forEach(t => t.stop()); ctx.close();
+  if (live && rec.phrase.length) flushPhrase();   // хвост последней фразы
+  rec = null;
+
   $('recBtn').textContent = '🎙 Записать с микрофона'; $('recBtn').className = 'primary';
   $('timer').hidden = true; $('recStatus').textContent = '';
+
   const total = chunks.reduce((n, c) => n + c.length, 0);
   if (!total) { $('recStatus').textContent = 'пустая запись'; return; }
   const pcm = new Float32Array(total);
   let off = 0; for (const c of chunks) { pcm.set(c, off); off += c.length; }
   const wav = encodeWav(downsample(pcm, sampleRate, 16000), 16000);
-  transcribe(new Blob([wav], { type: 'audio/wav' }), 'recording.wav');
+  const blob = new Blob([wav], { type: 'audio/wav' });
+
+  if (!live) { transcribe(blob, 'recording.wav'); return; }
+
+  // живой режим: дождаться хвоста и финализировать карточку
+  finished.chain.then(() => {
+    const dur = total / sampleRate;
+    const card = finished.card;
+    card.querySelector('#live-mic')?.remove();
+    const meta = card.querySelector('.meta');
+    meta.textContent = `живая диктовка · ${finished.parts.length} фраз · 🎧 ${dur.toFixed(1)} с`;
+    card.insertAdjacentHTML('beforeend', `<audio controls src="${URL.createObjectURL(blob)}"></audio>`);
+  });
 }
 
 function downsample(pcm, from, to) {
@@ -397,6 +544,11 @@ async function transcribe(blob, filename) {
   card.innerHTML = `<div class="status"><span class="spin"></span>Распознаю <b>${esc(filename)}</b>…</div>`;
   $('results').prepend(card);
 
+  // ---- SSE-стриминг (только OpenAI-контракт) ----
+  if (ep === 'openai' && $('streamOn').checked) {
+    return transcribeStream(card, blob, filename, mdl, vad);
+  }
+
   let url, fd = new FormData();
   if (ep === 'openai') {
     url = '/v1/audio/transcriptions';
@@ -435,6 +587,94 @@ async function transcribe(blob, filename) {
   const duration = await audioDuration(blob);
 
   renderResult(card, { blob, filename, ep, fmt, mdl, wts, err, bodyText, elapsed, duration, emoData });
+}
+
+/* ============================ streaming ============================== */
+async function transcribeStream(card, blob, filename, mdl, vad) {
+  const fd = new FormData();
+  fd.append('file', blob, filename);
+  fd.append('stream', 'true');
+  if (mdl) fd.append('model', mdl);
+  fd.append('chunking_strategy', vad ? 'auto' : 'none');
+
+  const t0 = performance.now();
+  let firstDelta = null, events = [], text = '';
+
+  card.innerHTML = `
+    <div class="status" id="live-status"><span class="spin"></span>стриминг…</div>
+    <div class="result-text" style="min-height:52px"></div>
+    <div class="stream-log"></div>
+    <div class="meta"></div>`;
+  const textEl = card.querySelector('.result-text');
+  const statusEl = card.querySelector('.status');
+  const metaEl = card.querySelector('.meta');
+  const logEl = card.querySelector('.stream-log');
+
+  const logEvent = (type, msg) => {
+    const t = ((performance.now() - t0) / 1000).toFixed(2);
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = `<span class="log-t">${t} с</span>` +
+      `<span class="log-type ${type === 'delta' ? 'delta' : type === 'done' ? 'done' : 'err'}">${esc(type)}</span>` +
+      `<span class="log-text">${esc(msg)}</span>`;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  try {
+    const resp = await fetch('/v1/audio/transcriptions', { method: 'POST', body: fd, headers: authHeaders() });
+    if (resp.status === 401) { showGate('Сессия истекла — введите токен заново'); return; }
+    if (!resp.ok || !resp.body) {
+      card.innerHTML = `<div class="meta" style="color:var(--err)">Ошибка: HTTP ${resp.status}</div><pre>${esc(await resp.text())}</pre>`;
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const raw = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!raw.startsWith('data:')) continue;
+        let ev;
+        try { ev = JSON.parse(raw.slice(5)); } catch { continue; }
+        events.push(ev);
+        if (ev.type === 'transcript.text.delta') {
+          if (firstDelta === null) firstDelta = (performance.now() - t0) / 1000;
+          text += ev.delta;
+          textEl.textContent = text;
+          logEvent('delta', `+${ev.delta.trim().length} зн. «${ev.delta.trim().slice(0, 90)}»`);
+        } else if (ev.type === 'transcript.text.done') {
+          text = ev.text;
+          textEl.textContent = text;
+          logEvent('done', `полный текст, ${ev.text.length} зн. · usage: ${ev.usage?.seconds ?? '?'} с аудио`);
+        } else if (ev.type === 'error') {
+          statusEl.innerHTML = `<span style="color:var(--err)">Ошибка стрима: ${esc(ev.error?.message || '')}</span>`;
+          logEvent('error', ev.error?.message || 'unknown');
+        }
+      }
+    }
+  } catch (e) {
+    statusEl.innerHTML = `<span style="color:var(--err)">Ошибка: ${esc(String(e))}</span>`;
+    return;
+  }
+
+  const elapsed = (performance.now() - t0) / 1000;
+  const duration = await audioDuration(blob);
+  statusEl.remove();
+  const meta = [`⏱ ${elapsed.toFixed(2)} с`];
+  if (firstDelta !== null) meta.push(`🚀 первый текст через ${firstDelta.toFixed(2)} с`);
+  if (duration) { meta.push(`🎧 ${duration.toFixed(1)} с`); meta.push(`⚡ ${(duration / elapsed).toFixed(1)}×`); }
+  meta.push('SSE-стриминг'); if (mdl) meta.push(mdl);
+  metaEl.textContent = meta.join(' · ');
+  card.insertAdjacentHTML('beforeend',
+    `<audio controls src="${URL.createObjectURL(blob)}"></audio>
+     <details><summary>сырые события (${events.length})</summary><pre>${esc(events.map(e => JSON.stringify(e)).join('\n'))}</pre></details>`);
 }
 
 /* ============================== render =============================== */
