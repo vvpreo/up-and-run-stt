@@ -75,7 +75,7 @@ async def openai_transcribe(
     ),
     # Принимаем-и-игнорируем: не 422 на параметры новых OpenAI-моделей
     stream: Optional[bool] = Form(None, description="SSE streaming (not supported, ignored)"),
-    chunking_strategy: Optional[str] = Form(None, include_in_schema=False),
+    chunking_strategy: Optional[str] = Form(None, description="'auto' = VAD chunking at speech pauses; 'none' = fixed 30s chunks; default = VAD_CHUNKING env"),
 ):
     """
     OpenAI-совместимый эндпоинт транскрипции.
@@ -128,6 +128,12 @@ async def openai_transcribe(
     if stream:
         logger.warning("stream=true requested but SSE streaming is not supported; returning full response")
 
+    # chunking_strategy: "auto" -> VAD-чанкование, "none"/"fixed" -> жёсткие
+    # границы, отсутствует -> серверный дефолт (VAD_CHUNKING)
+    vad_override = None
+    if chunking_strategy:
+        vad_override = chunking_strategy.strip().lower() not in ("none", "fixed", "off")
+
     # Выбор модели по полю `model` запроса (реестр моделей инстанса);
     # 'whisper-1' и незнакомые имена -> модель по умолчанию.
     selected_model = resolve_model(model)
@@ -176,6 +182,7 @@ async def openai_transcribe(
                     language=effective_language,
                     word_timestamps=want_words,
                     output=internal_output,
+                    options={"vad": vad_override} if vad_override is not None else None,
                 )
             except TranscriptionTimeoutError as e:
                 logger.error(f"[OpenAI API] Transcription timeout: {e}")

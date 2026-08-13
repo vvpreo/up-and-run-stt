@@ -149,6 +149,7 @@
     <div class="row" style="margin-top:10px">
       <label class="toggle"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
       <label class="toggle" id="emoWrap" hidden><input type="checkbox" id="emoOn"> Эмоции</label>
+      <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается"><input type="checkbox" id="vadOn"> VAD-чанкование</label>
     </div>
     <div class="hint" id="fmtHint"></div>
   </div>
@@ -259,8 +260,10 @@ function renderHealth() {
       `RAM: ${Math.round(h.memory?.process_memory_mb ?? 0)} МБ · очередь: ${h.pending_requests ?? 0}`;
     $('emoWrap').hidden = !h.emotions_enabled;
     $('docsLinks').hidden = !h.docs_enabled;
+    if (!vadInit) { $('vadOn').checked = !!h.vad_chunking; vadInit = true; }
   }
 }
+let vadInit = false;
 
 /* =============================== options ============================= */
 const FORMATS = {
@@ -385,6 +388,7 @@ $('drop').addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if 
 async function transcribe(blob, filename) {
   const ep = $('endpoint').value, fmt = $('format').value, mdl = $('model').value;
   const wts = $('wordTs').checked, emo = $('emoOn').checked && !$('emoWrap').hidden;
+  const vad = $('vadOn').checked;
 
   const empty = document.querySelector('#results .empty');
   if (empty) empty.remove();
@@ -400,8 +404,9 @@ async function transcribe(blob, filename) {
     fd.append('response_format', fmt);
     if (mdl) fd.append('model', mdl);
     if (wts) { fd.append('timestamp_granularities[]', 'word'); fd.append('timestamp_granularities[]', 'segment'); }
+    fd.append('chunking_strategy', vad ? 'auto' : 'none');
   } else {
-    url = `/gigaam/asr?output=${fmt}&language=${$('lang').value}&word_timestamps=${wts}`
+    url = `/gigaam/asr?output=${fmt}&language=${$('lang').value}&word_timestamps=${wts}&vad=${vad}`
         + (mdl ? `&model=${mdl}` : '');
     fd.append('audio_file', blob, filename);
   }

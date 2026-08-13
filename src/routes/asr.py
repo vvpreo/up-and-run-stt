@@ -58,6 +58,7 @@ def set_asr_model(model: "ASRModel") -> None:
 async def transcribe(
     audio_file: UploadFile = File(..., description="Audio file to transcribe"),
     model: Optional[str] = Query(None, description="GigaAM variant from the instance set (e.g. v3_e2e_ctc); empty -> default model"),
+    vad: Optional[bool] = Query(None, description="VAD chunking for long audio: cut at speech pauses, skip silence (default: VAD_CHUNKING env)"),
     output: str = Query("json", description="Output format: text, json, vtt, srt, tsv"),
     task: str = Query("transcribe", description="Task: transcribe or translate"),
     language: Optional[str] = Query(None, description="Language code (e.g., 'russian', 'en')"),
@@ -130,6 +131,7 @@ async def transcribe(
                     language=effective_language,
                     word_timestamps=word_timestamps,
                     output=output,
+                    options={"vad": vad} if vad is not None else None,
                 )
             except TranscriptionTimeoutError as e:
                 logger.error(f"Transcription timeout: {e}")

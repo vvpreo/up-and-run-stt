@@ -30,6 +30,7 @@ from src.config import (
     GIGAAM_MIN_CHUNK_SEC,
     MODEL_CACHE_DIR,
     SAMPLE_RATE,
+    VAD_CHUNKING,
 )
 from src.models.schemas import Segment, TranscriptionResponse, WordTimestamp
 
@@ -309,7 +310,7 @@ class GigaAMOnnxASR(ASRModel):
         return token_ids, token_frames, t_max
 
     def _chunk_bounds(self, num_samples: int) -> List[Tuple[int, int]]:
-        """Границы чанков (как в torch-движке: хвост < min сливается с предыдущим)."""
+        """Жёсткие границы чанков (хвост < min сливается с предыдущим)."""
         chunk = int(GIGAAM_CHUNK_SEC * SAMPLE_RATE)
         min_chunk = int(GIGAAM_MIN_CHUNK_SEC * SAMPLE_RATE)
         bounds: List[Tuple[int, int]] = []
@@ -321,6 +322,58 @@ class GigaAMOnnxASR(ASRModel):
                 break
             bounds.append((pos, end))
             pos = end
+        return bounds
+
+    def _chunk_bounds_vad(self, audio: np.ndarray) -> Optional[List[Tuple[int, int]]]:
+        """
+        Границы чанков по паузам речи (silero-vad).
+
+        Чанк набирает речевые участки, пока укладывается в GIGAAM_CHUNK_SEC;
+        резка проходит по тишине между участками, чисто тихие промежутки
+        между чанками не транскрибируются вовсе. Границы остаются в исходной
+        временной шкале — таймстемпы слов/сегментов не смещаются.
+
+        Returns:
+            Список границ; [] — речи нет; None — VAD недоступен (фолбэк).
+        """
+        from src.asr.vad import silero_vad
+
+        if not silero_vad.available():
+            logger.warning("VAD model not found; falling back to fixed chunking")
+            return None
+
+        regions = silero_vad.speech_regions(audio)
+        if not regions:
+            return []
+
+        chunk_max = int(GIGAAM_CHUNK_SEC * SAMPLE_RATE)
+        min_chunk = int(GIGAAM_MIN_CHUNK_SEC * SAMPLE_RATE)
+
+        # Группируем речевые участки в чанки до chunk_max по общему охвату
+        grouped: List[Tuple[int, int]] = []
+        cur_s, cur_e = regions[0]
+        for s, e in regions[1:]:
+            if e - cur_s <= chunk_max:
+                cur_e = e
+            else:
+                grouped.append((cur_s, cur_e))
+                cur_s, cur_e = s, e
+        grouped.append((cur_s, cur_e))
+
+        # Непрерывная речь длиннее chunk_max — дорезаем жёстко внутри
+        bounds: List[Tuple[int, int]] = []
+        for s, e in grouped:
+            if e - s <= chunk_max:
+                bounds.append((s, e))
+                continue
+            pos = s
+            while pos < e:
+                end = min(pos + chunk_max, e)
+                if e - pos < min_chunk and bounds:
+                    bounds[-1] = (bounds[-1][0], e)
+                    break
+                bounds.append((pos, end))
+                pos = end
         return bounds
 
     def transcribe(
@@ -341,9 +394,16 @@ class GigaAMOnnxASR(ASRModel):
         audio = np.asarray(audio, dtype=np.float32)
         duration = len(audio) / SAMPLE_RATE
 
+        # per-request переопределение VAD (options.vad), иначе — env-дефолт
+        use_vad = VAD_CHUNKING
+        if options and options.get("vad") is not None:
+            use_vad = bool(options["vad"])
+
         with self.model_lock:
             if duration > GIGAAM_MAX_SHORT_AUDIO_SEC:
-                bounds = self._chunk_bounds(len(audio))
+                bounds = self._chunk_bounds_vad(audio) if use_vad else None
+                if bounds is None:
+                    bounds = self._chunk_bounds(len(audio))
             else:
                 bounds = [(0, len(audio))]
 

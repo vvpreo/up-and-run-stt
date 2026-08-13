@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter
 
 from src.asr.registry import list_models
-from src.config import AUTH_TOKEN, DEFAULT_MODEL, ENABLE_DOCS, ENGINE, TIMEOUT_ENABLED
+from src.asr.vad import silero_vad
+from src.config import AUTH_TOKEN, DEFAULT_MODEL, ENABLE_DOCS, ENGINE, TIMEOUT_ENABLED, VAD_CHUNKING
 from src.routes.emotion import emotions_available
 from src.services.limits import pending_count
 from src.services.memory_monitor import memory_monitor
@@ -104,6 +105,8 @@ async def health_check() -> dict:
         "emotions_enabled": emotions_available(),
         # Включён ли Swagger UI (/docs) и OpenAPI-схема (/openapi.json)
         "docs_enabled": ENABLE_DOCS,
+        # VAD-чанкование: дефолт сервера (переопределяется per-request)
+        "vad_chunking": VAD_CHUNKING and silero_vad.available(),
         "timeout_enabled": TIMEOUT_ENABLED,
         "performance": perf_stats,
         "memory": memory_info,

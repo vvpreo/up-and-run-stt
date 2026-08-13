@@ -31,6 +31,10 @@ RUN python -c "import urllib.request; urllib.request.urlretrieve('https://johnva
 
 WORKDIR /app
 
+# Silero-VAD (~2.3 МБ, MIT) — запечён в образ: детекция речи для умного
+# чанкования длинного аудио (см. src/asr/vad.py). Зеркало — наш HF-репо.
+RUN mkdir -p /app/vad && python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/vvpreo/gigaam-v3-onnx/resolve/main/silero_vad.onnx', '/app/vad/silero_vad.onnx')"
+
 # Инференс и сервис: onnxruntime вместо torch (~50 МБ вместо ~850)
 RUN pip install --no-cache-dir \
     onnxruntime \

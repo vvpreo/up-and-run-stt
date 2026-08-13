@@ -63,6 +63,7 @@ def _run_transcription_with_cleanup(
     word_timestamps: bool,
     output: str,
     timed_out: threading.Event,
+    options: dict | None = None,
 ) -> Union["TranscriptionResponse", str]:
     """
     Wrapper that runs transcription and cleans up if the caller has timed out.
@@ -87,6 +88,7 @@ def _run_transcription_with_cleanup(
             language=language,
             word_timestamps=word_timestamps,
             output=output,
+            options=options,
         )
         if timed_out.is_set():
             logger.warning(
@@ -119,6 +121,7 @@ def transcribe_with_timeout(
     language: str | None,
     word_timestamps: bool,
     output: str,
+    options: dict | None = None,
 ) -> tuple[Union["TranscriptionResponse", str], float]:
     """
     Выполняет транскрипцию с адаптивным таймаутом.
@@ -155,6 +158,7 @@ def transcribe_with_timeout(
             language=language,
             word_timestamps=word_timestamps,
             output=output,
+            options=options,
         )
         elapsed = time.perf_counter() - start_time
         return result, elapsed
@@ -191,6 +195,7 @@ def transcribe_with_timeout(
             word_timestamps=word_timestamps,
             output=output,
             timed_out=timed_out,
+            options=options,
         )
 
         try:

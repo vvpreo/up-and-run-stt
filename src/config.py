@@ -48,6 +48,11 @@ KNOWN_GIGAAM_VARIANTS = {
 # with repeated calls to `model.transcribe()`.
 GIGAAM_MAX_SHORT_AUDIO_SEC = float(os.getenv("GIGAAM_MAX_SHORT_AUDIO_SEC", "25.0"))
 
+# VAD-чанкование длинного аудио (silero-vad): резка по паузам речи вместо
+# жёстких границ, тишина между чанками пропускается. Переопределяется
+# per-request (native: ?vad=, OpenAI: chunking_strategy=auto|none).
+VAD_CHUNKING = os.getenv("VAD_CHUNKING", "true").lower() == "true"
+
 # Chunk size (seconds) used when splitting long audio into fixed-size chunks for repeated
 # calls to `model.transcribe()`. Configure via env vars:
 #   - GIGAAM_CHUNK_SEC: preferred chunk size in seconds (default: 30)

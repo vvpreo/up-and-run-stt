@@ -1,13 +1,13 @@
 # TODO
 
-- [ ] SSE-стриминг транскрипции: `stream=true` на `/v1/audio/transcriptions` (события `transcript.text.delta` / `transcript.text.done`, как у OpenAI; псевдо-стриминг по готовым сегментам достаточен)
-- [ ] VAD-чанкование длинного аудио: silero-vad (ONNX, ~2 МБ) для умных границ вместо фиксированных 30-с чанков — меньше разрезанных слов на стыках
 - [ ] Публикация на Docker Hub: GitHub-репо (вычистить инфраструктурные детали) → CI на GitHub Actions (PR: build + pytest + smoke `/health`; тег `v*`: multi-arch push на Hub + GHCR, trivy-скан, README-sync) → ARM64 (заменить amd64-URL статического ffmpeg на выбор по `TARGETARCH`, OCI-лейблы, пин версий зависимостей) → англоязычный README для Hub
 - [ ] Метрики Prometheus: `/metrics` (счётчики запросов по эндпоинту/модели/статусу, гистограммы времени и RTF, секунды обработанного аудио, глубина очереди)
 - [ ] Опционально: вариант образа с запечёнными весами (`-offline`, +~850 МБ) для air-gapped и независимости от HF
 - [ ] Мелочь OpenAI-полноты: `language` в verbose_json полным английским словом («russian»), как у whisper-1
 
 # PLANNED
+
+- [ ] [SSE-стриминг + VAD-чанкование](docs/plans/streaming-and-vad.md) — план с оценками производительности и ресурсов; порядок: VAD → стриминг → фразовые cue
 
 # TO REVIEW
 

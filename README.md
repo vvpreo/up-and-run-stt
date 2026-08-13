@@ -114,7 +114,7 @@ curl -s http://localhost:9007/v1/audio/transcriptions \
 ### `POST /gigaam/asr` (нативный)
 
 Поле файла — **`audio_file`**. Query-параметры: `output` (`json`/`text`/`srt`/`vtt`/`tsv`),
-`language`, `word_timestamps`.
+`language`, `word_timestamps`, `model`, `vad` (VAD-чанкование, дефолт — `VAD_CHUNKING`).
 
 ```bash
 curl -s "http://localhost:9007/gigaam/asr?output=json&language=ru" \
@@ -174,6 +174,8 @@ ogg/vorbis, opus, m4a/aac, webm, wma** и другие. Декодировани
 | `AUTH_TOKEN` | *(пусто)* | Пусто = авторизация отключена. **В текущем compose задан** — Bearer-токен обязателен для транскрипционных эндпоинтов. |
 | `GIGAAM_MAX_SHORT_AUDIO_SEC` | `25.0` | Длиннее — режется на чанки. |
 | `GIGAAM_CHUNK_SEC` / `GIGAAM_MIN_CHUNK_SEC` | `30` / `5` | Размер чанков для длинного аудио. |
+| `VAD_CHUNKING` | `true` | Резка длинного аудио по паузам речи (silero-vad), тишина пропускается. Per-request: `?vad=` (нативный), `chunking_strategy=auto\|none` (OpenAI). |
+| `VAD_THRESHOLD` | `0.5` | Порог вероятности речи VAD (ниже — считается тишиной). |
 | `OMP_NUM_THREADS` | *(не задан)* | Ограничение потоков torch/OpenMP (по умолчанию = число физ. ядер). |
 | `MAX_UPLOAD_MB` | `200` | Лимит размера загружаемого аудио; сверх — `413`. `0` = без лимита. |
 | `MAX_PENDING_REQUESTS` | `8` | Лимит одновременных/ожидающих транскрипций; сверх — `429`. `0` = без лимита. |
