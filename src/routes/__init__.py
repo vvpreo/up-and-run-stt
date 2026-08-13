@@ -10,9 +10,11 @@
 from src.routes.health import router as health_router
 from src.routes.asr import router as asr_router
 from src.routes.openai import router as openai_router
+from src.routes.emotion import router as emotion_router
 
 __all__ = [
     "health_router",
     "asr_router",
     "openai_router",
+    "emotion_router",
 ]

@@ -7,7 +7,7 @@ Docker Hub) — в [../RESEARCH_PUBLIC_IMAGE.md](../RESEARCH_PUBLIC_IMAGE.md).
 
 ## A. Возможности GigaAM, которые уже есть в vendored-пакете, но не выведены
 
-### A1. Пословные таймстемпы (half-wired) — средняя трудоёмкость, высокая ценность
+### A1. Пословные таймстемпы — ✅ СДЕЛАНО (в ONNX-движке)
 - Пакет умеет: `model.transcribe(wav, word_timestamps=True)` возвращает
   `TranscriptionResult(text, words)`; механика — `timestamps_utils.py`
   (`compute_frame_shift`, `frames_to_words`).
@@ -20,14 +20,14 @@ Docker Hub) — в [../RESEARCH_PUBLIC_IMAGE.md](../RESEARCH_PUBLIC_IMAGE.md).
   через `frames_to_words`; прокинуть в `verbose_json` (words/segments) и в
   нативный `json`. `srt`/`vtt` станут точнее (сейчас границы — чанки).
 
-### A2. Эмоции: GigaAMEmo — небольшая/средняя трудоёмкость, фича-отличие
+### A2. Эмоции: GigaAMEmo — ✅ СДЕЛАНО (`POST /gigaam/emotion` + WebUI)
 - В пакете: класс `GigaAMEmo`, `get_probs(wav) -> {emotion: prob}`,
   загрузка `load_model("emo")` (веса ~в том же CDN).
 - Идея: endpoint `POST /gigaam/emotion` (+ галочка на тестовой странице).
   Ни один из массовых whisper-серверов такого не даёт — отличительная фича
   для публичного образа.
 
-### A3. ONNX-инференс — ПОДТВЕРЖДЁН ЭКСПЕРИМЕНТАЛЬНО, миграция начата
+### A3. ONNX-инференс — ✅ СДЕЛАНО (образ 733 МБ, веса на HF, деплой переключён)
 Ресерч 2026-08-13 (все проверки в контейнере, на реальных весах):
 - **Транскрипция**: `v3_e2e_ctc` конвертирован (`to_onnx` → 845 МБ fp32
   .onnx + yaml); ONNX-инференс даёт транскрипт **бит-в-бит** с torch;
@@ -72,7 +72,7 @@ Docker Hub) — в [../RESEARCH_PUBLIC_IMAGE.md](../RESEARCH_PUBLIC_IMAGE.md).
 
 ## B. Ops/безопасность для «голого» `docker run` (без нашего nginx)
 
-### B1. Блокировка event loop во время транскрипции — ВЫСОКИЙ приоритет
+### B1. Блокировка event loop — ✅ ИСПРАВЛЕНО (asyncio.to_thread)
 - Хендлеры `async def`, но внутри — синхронный `future.result(timeout=...)`
   (`src/services/timeout.py`). На время транскрипции замирает ВЕСЬ сервер:
   /health, страница, параллельные запросы.
@@ -80,19 +80,19 @@ Docker Hub) — в [../RESEARCH_PUBLIC_IMAGE.md](../RESEARCH_PUBLIC_IMAGE.md).
   синхронными (FastAPI сам уведёт их в threadpool). Инференс на модель уже
   сериализован `model_lock` — конкурентность станет честной очередью.
 
-### B2. Контейнер работает от root — ВЫСОКИЙ (публичный образ)
+### B2. Контейнер от root — ✅ ИСПРАВЛЕНО (uid 1000)
 - В Dockerfile нет `USER`. Стандарт для публичных образов — непривилегированный
   пользователь + владение только `/app/data`.
 
-### B3. Нет лимита размера загрузки на уровне приложения — ВЫСОКИЙ
+### B3. Лимит размера загрузки — ✅ СДЕЛАНО (MAX_UPLOAD_MB → 413)
 - У нас 200m стоит в nginx, но голый образ ничем не защищён: файл на гигабайты
   → OOM. Нужен env `MAX_UPLOAD_MB` + проверка Content-Length/стриминг.
 
-### B4. CORS не настраивается — средний
+### B4. CORS — ✅ СДЕЛАНО (CORS_ORIGINS)
 - Браузерное приложение с другого origin не сможет звать API. Нужен env
   `CORS_ORIGINS` (по умолчанию выкл).
 
-### B5. Нет ограничения очереди/rate limit — средний
+### B5. Очередь — ✅ СДЕЛАНО (MAX_PENDING_REQUESTS → 429)
 - N параллельных запросов честно встанут в очередь на lock (после фикса B1),
   но копятся без предела: нужен настраиваемый предел очереди (429 при
   переполнении).

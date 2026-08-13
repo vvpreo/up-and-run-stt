@@ -25,7 +25,7 @@ from src.config import (
     CORS_ORIGINS,
     ENABLE_DOCS,
 )
-from src.routes import asr_router, health_router, openai_router
+from src.routes import asr_router, emotion_router, health_router, openai_router
 from src.routes.asr import set_asr_model as set_asr_model_asr
 from src.routes.health import set_asr_model as set_asr_model_health
 from src.routes.openai import set_asr_model as set_asr_model_openai
@@ -150,6 +150,16 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(asr_router)
     app.include_router(openai_router)
+    app.include_router(emotion_router)
+
+    # Проверка токена для WebUI (страница показывает интерфейс только
+    # после успешного ответа отсюда)
+    from src.auth import verify_token
+    from fastapi import Depends
+
+    @app.get("/auth/check", include_in_schema=False)
+    async def auth_check(_token: str = Depends(verify_token)) -> dict:
+        return {"ok": True}
 
     # Тестовая веб-страница (запись с микрофона / загрузка файла).
     # Сама страница открыта; транскрипция с неё требует Bearer-токен,

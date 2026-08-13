@@ -65,9 +65,10 @@ curl -s http://localhost:9007/health | python3 -m json.tool
 | Метод | Путь | Назначение |
 |---|---|---|
 | `POST` | `/v1/audio/transcriptions` | OpenAI-совместимый (поле `file`). Для VoiceInk и OpenAI SDK. |
-| `POST` | `/gigaam/asr` | Нативный (поле `audio_file`), расширенный ответ: сегменты, метрики. |
-| `GET`  | `/health` | Статус, флаг загрузки модели, движок, память. |
-| `GET`  | `/` | Тестовая веб-страница: запись с микрофона / загрузка файла ([src/static/index.html](src/static/index.html)). |
+| `POST` | `/gigaam/asr` | Нативный (поле `audio_file`), расширенный ответ: сегменты, слова, метрики. |
+| `POST` | `/gigaam/emotion` | Эмоции речи (GigaAMEmo): angry / sad / neutral / positive. |
+| `GET`  | `/health` | Статус, модели, очередь, флаги фич, память. |
+| `GET`  | `/` | WebUI-консоль: вход по `AUTH_TOKEN`, микрофон/файл, оба контракта, все форматы, слова, эмоции ([src/static/index.html](src/static/index.html)). |
 
 Также есть Swagger UI: `http://localhost:9007/docs`.
 
@@ -177,6 +178,8 @@ ogg/vorbis, opus, m4a/aac, webm, wma** и другие. Декодировани
 | `CORS_ORIGINS` | *(пусто)* | CORS-origin'ы через запятую (`*` = все). Пусто = CORS выключен. |
 | `ENABLE_DOCS` | `true` | `false` — скрыть `/docs`, `/redoc`, `/openapi.json`. |
 | `LOG_LEVEL` | `INFO` | Уровень логирования (DEBUG/INFO/WARNING/ERROR). |
+| `ENABLE_EMOTIONS` | `true` | `false` — отключить `/gigaam/emotion` (модель эмоций стоит ~1 ГБ RAM, грузится лениво при первом запросе). |
+| `INFERENCE_BACKEND` | `onnx` | `torch` — PyTorch-бэкенд (только образ из `Dockerfile.torch`). |
 
 ### Модели: набор инстанса и выбор в запросе
 

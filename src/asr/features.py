@@ -58,12 +58,18 @@ class NumpyFeatureExtractor:
         self,
         sample_rate: int = 16000,
         features: int = 64,
-        n_fft: int = 320,
-        win_length: int = 320,
-        hop_length: int = 160,
-        center: bool = False,
+        n_fft: int = None,
+        win_length: int = None,
+        hop_length: int = None,
+        center: bool = True,
         **_ignored,
     ):
+        # Дефолты как у vendored FeatureExtractor (важно для emo-модели,
+        # чей yaml задаёт только sample_rate/features): hop=sr//100,
+        # win=n_fft=sr//40, center=True. Конфиги v3 задают всё явно.
+        hop_length = hop_length or sample_rate // 100
+        win_length = win_length or sample_rate // 40
+        n_fft = n_fft or sample_rate // 40
         self.sample_rate = sample_rate
         self.n_mels = features
         self.n_fft = n_fft

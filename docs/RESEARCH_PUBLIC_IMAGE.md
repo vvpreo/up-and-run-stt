@@ -4,6 +4,15 @@
 полнота OpenAI-совместимости, практики публикации на Docker Hub.
 Выводы сведены в приоритеты в [plans/public-image-roadmap.md](plans/public-image-roadmap.md).
 
+> **Статус на конец 2026-08-13 — уже реализовано:** переезд на ONNX Runtime
+> (образ 733 МБ без torch, веса на [vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx),
+> паритет с torch бит-в-бит), пословные таймстемпы (оба контракта),
+> эмоции (`/gigaam/emotion`), ops-фиксы (event loop, 413/429-лимиты,
+> non-root, CORS, timing-safe auth), токен-гейт WebUI с показом всех фич,
+> тестовый набор 26 тестов. Из пробелов ниже остаются актуальными:
+> SSE-стриминг, `/v1/models`, OpenAI-формат ошибок, VAD-чанкование,
+> ARM64/CI/GHCR, метрики.
+
 ---
 
 ## 1. Конкуренты: сравнение фич

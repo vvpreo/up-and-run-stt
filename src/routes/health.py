@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter
 
 from src.asr.registry import list_models
-from src.config import DEFAULT_MODEL, ENGINE, TIMEOUT_ENABLED
+from src.config import AUTH_TOKEN, DEFAULT_MODEL, ENABLE_DOCS, ENGINE, TIMEOUT_ENABLED
+from src.routes.emotion import emotions_available
 from src.services.limits import pending_count
 from src.services.memory_monitor import memory_monitor
 from src.services.performance import performance_tracker
@@ -97,6 +98,12 @@ async def health_check() -> dict:
         "default_model": DEFAULT_MODEL,
         # Запросы в обработке/очереди (лимит — MAX_PENDING_REQUESTS)
         "pending_requests": pending_count(),
+        # Требуется ли Bearer-токен (для гейта WebUI)
+        "auth_required": bool(AUTH_TOKEN),
+        # Доступно ли распознавание эмоций (/gigaam/emotion)
+        "emotions_enabled": emotions_available(),
+        # Включён ли Swagger UI (/docs) и OpenAPI-схема (/openapi.json)
+        "docs_enabled": ENABLE_DOCS,
         "timeout_enabled": TIMEOUT_ENABLED,
         "performance": perf_stats,
         "memory": memory_info,

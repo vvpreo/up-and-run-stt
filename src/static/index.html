@@ -3,133 +3,154 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GigaAM STT — тест</title>
+<title>gigaam-stt</title>
 <link rel="icon" href="data:,">
 <style>
   :root {
-    --bg: #10141a;
-    --card: #1a2029;
-    --card2: #212936;
-    --border: #2e3a4b;
-    --text: #e8edf4;
-    --muted: #93a1b3;
-    --accent: #4da3ff;
-    --ok: #3ecf8e;
-    --err: #ff6b6b;
-    --rec: #ff5252;
+    --bg: #10141a; --card: #1a2029; --card2: #212936; --border: #2e3a4b;
+    --text: #e8edf4; --muted: #93a1b3; --accent: #4da3ff; --ok: #3ecf8e;
+    --err: #ff6b6b; --rec: #ff5252; --warn: #e8c98a;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
   body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
+    margin: 0; background: var(--bg); color: var(--text);
     font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
     padding: 24px 16px 60px;
   }
-  .wrap { max-width: 780px; margin: 0 auto; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
   .chip {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 12px; padding: 3px 10px; border-radius: 999px;
-    border: 1px solid var(--border); background: var(--card);
-    vertical-align: 2px; margin-left: 10px;
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); white-space: nowrap;
   }
+  a.chip { text-decoration: none; }
+  a.chip:hover { border-color: var(--accent); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .dot.ok { background: var(--ok); }
-  .dot.err { background: var(--err); }
-
-  .card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 18px; margin-bottom: 16px;
+  .dot.ok { background: var(--ok); } .dot.err { background: var(--err); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  label.opt { font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  select, input[type=text], input[type=password] {
+    background: var(--card2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 10px; font-size: 14px;
   }
-  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-  label.opt { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
-  select, input[type=text] {
-    background: var(--card2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 8px;
-    padding: 7px 10px; font-size: 14px;
-  }
+  .toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--text); cursor: pointer; padding: 6px 0; user-select: none; }
+  .toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
   button {
-    background: var(--card2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 10px;
-    padding: 10px 18px; font-size: 15px; cursor: pointer;
+    background: var(--card2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 18px; font-size: 15px; cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
   button:disabled { opacity: .45; cursor: default; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #08111d; font-weight: 600; }
   button.rec-on { background: var(--rec); border-color: var(--rec); color: #fff; font-weight: 600; }
-
+  button.ghost { padding: 5px 12px; font-size: 12.5px; color: var(--muted); }
   .drop {
-    border: 2px dashed var(--border); border-radius: 12px;
-    padding: 22px; text-align: center; color: var(--muted);
-    cursor: pointer; transition: border-color .15s, background .15s;
+    border: 2px dashed var(--border); border-radius: 12px; padding: 18px;
+    text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
   }
   .drop.over { border-color: var(--accent); background: var(--card2); }
-
-  .timer { font-variant-numeric: tabular-nums; font-size: 15px; color: var(--rec); min-width: 52px; }
+  .timer { font-variant-numeric: tabular-nums; color: var(--rec); min-width: 52px; }
   .hint { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
-  .warn {
-    background: #33251533; border: 1px solid #7a5c2e; color: #e8c98a;
-    border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-top: 12px;
-  }
+  .warn { background: #33251533; border: 1px solid #7a5c2e; color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-top: 12px; }
 
+  /* ---- gate ---- */
+  #gate { max-width: 400px; margin: 12vh auto 0; text-align: center; }
+  #gate .card { padding: 30px 26px; }
+  #gate h2 { margin: 0 0 6px; font-size: 18px; }
+  #gate p { color: var(--muted); font-size: 13.5px; margin: 0 0 18px; }
+  #gate input { width: 100%; margin-bottom: 12px; padding: 10px 12px; }
+  #gate button { width: 100%; }
+  #gateErr { color: var(--err); font-size: 13px; min-height: 18px; margin-top: 10px; }
+
+  /* ---- results ---- */
   .result-text {
-    background: var(--card2); border: 1px solid var(--border);
-    border-radius: 10px; padding: 14px; white-space: pre-wrap;
-    font-size: 16px; margin: 10px 0;
+    background: var(--card2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; white-space: pre-wrap; font-size: 15.5px; margin: 10px 0;
   }
-  .meta { font-size: 12.5px; color: var(--muted); display: flex; gap: 16px; flex-wrap: wrap; }
-  details { margin-top: 8px; }
+  .result-text.mono { font-family: ui-monospace, monospace; font-size: 12.5px; overflow-x: auto; }
+  .meta { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px 14px; flex-wrap: wrap; }
+  details { margin-top: 10px; }
   summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-  pre {
-    background: #0c1015; border: 1px solid var(--border); border-radius: 8px;
-    padding: 12px; overflow-x: auto; font-size: 12.5px; margin: 8px 0 0;
-  }
-  audio { width: 100%; margin-top: 8px; height: 36px; }
+  pre { background: #0c1015; border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 12px; margin: 8px 0 0; }
+  audio { width: 100%; margin-top: 10px; height: 36px; }
   .status { color: var(--muted); font-size: 14px; }
-  .spin {
-    display: inline-block; width: 14px; height: 14px; vertical-align: -2px;
-    border: 2px solid var(--muted); border-top-color: var(--accent);
-    border-radius: 50%; animation: sp .8s linear infinite; margin-right: 6px;
-  }
+  .spin { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; border: 2px solid var(--muted); border-top-color: var(--accent); border-radius: 50%; animation: sp .8s linear infinite; margin-right: 6px; }
   @keyframes sp { to { transform: rotate(360deg); } }
   .empty { color: var(--muted); text-align: center; padding: 8px; font-size: 14px; }
-  h2 { font-size: 15px; margin: 26px 0 10px; color: var(--muted); font-weight: 600; }
+  h2.sect { font-size: 15px; margin: 26px 0 10px; color: var(--muted); font-weight: 600; }
+
+  /* слова с таймстемпами */
+  .words { margin: 10px 0 2px; line-height: 2.1; }
+  .word {
+    display: inline-block; background: var(--card2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1px 7px; margin: 0 3px 3px 0; font-size: 13.5px; cursor: default;
+  }
+  .word:hover { border-color: var(--accent); }
+  .word small { color: var(--muted); font-size: 10px; margin-left: 5px; }
+
+  /* эмоции */
+  .emotions { margin: 12px 0 4px; display: grid; gap: 7px; }
+  .emo-row { display: grid; grid-template-columns: 110px 1fr 52px; gap: 10px; align-items: center; font-size: 13.5px; }
+  .emo-bar { height: 10px; background: var(--card2); border-radius: 6px; overflow: hidden; }
+  .emo-fill { height: 100%; border-radius: 6px; background: var(--accent); transition: width .4s; }
+  .emo-row.dominant { font-weight: 600; }
+  .emo-row.dominant .emo-fill { background: var(--ok); }
+  .seg-line { color: var(--muted); font-size: 12.5px; margin: 3px 0; }
+  .seg-line b { color: var(--text); font-weight: 500; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>GigaAM STT — проверка распознавания
+
+<!-- ======================= экран входа ======================= -->
+<div id="gate" hidden>
+  <div class="card">
+    <h2>gigaam-stt</h2>
+    <p>Введите ключ API (<code>AUTH_TOKEN</code>), чтобы открыть консоль сервиса.</p>
+    <input type="password" id="gateToken" placeholder="Bearer-токен" autocomplete="off">
+    <button class="primary" id="gateBtn">Войти</button>
+    <div id="gateErr"></div>
+  </div>
+</div>
+
+<!-- ======================= приложение ======================= -->
+<div class="wrap" id="app" hidden>
+  <h1>gigaam-stt — консоль сервиса
     <span class="chip"><span class="dot" id="healthDot"></span><span id="healthText">проверяю…</span></span>
+    <span id="docsLinks" hidden>
+      <a class="chip" href="/docs" target="_blank" title="Swagger UI">📘 API-документация</a>
+      <a class="chip" href="/openapi.json" target="_blank" title="OpenAPI-схема">openapi.json</a>
+    </span>
+    <button class="ghost" id="logoutBtn" hidden>сменить ключ</button>
   </h1>
   <div class="sub" id="healthDetail">&nbsp;</div>
 
   <div class="card">
     <div class="row">
-      <label class="opt">Эндпоинт
+      <label class="opt">Контракт API
         <select id="endpoint">
-          <option value="openai" selected>/v1/audio/transcriptions (OpenAI)</option>
-          <option value="asr">/gigaam/asr (нативный)</option>
+          <option value="openai" selected>OpenAI · /v1/audio/transcriptions</option>
+          <option value="native">Нативный · /gigaam/asr</option>
         </select>
       </label>
       <label class="opt">Модель
-        <select id="model"><option value="">по умолчанию</option></select>
+        <select id="model"></select>
       </label>
       <label class="opt">Формат ответа
         <select id="format"></select>
       </label>
       <label class="opt" id="langWrap" hidden>Язык
-        <select id="lang">
-          <option value="ru" selected>ru</option>
-          <option value="en">en</option>
-        </select>
-      </label>
-      <label class="opt">Ключ API (AUTH_TOKEN)
-        <input type="text" id="token" placeholder="Bearer-токен сервиса" size="22">
+        <select id="lang"><option value="ru" selected>ru</option><option value="en">en</option></select>
       </label>
     </div>
+    <div class="row" style="margin-top:10px">
+      <label class="toggle"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
+      <label class="toggle" id="emoWrap" hidden><input type="checkbox" id="emoOn"> Эмоции</label>
+    </div>
+    <div class="hint" id="fmtHint"></div>
   </div>
 
   <div class="card">
@@ -139,165 +160,204 @@
       <span class="status" id="recStatus"></span>
     </div>
     <div id="micWarn" class="warn" hidden>
-      Микрофон недоступен: страница открыта не в «безопасном контексте»
-      (нужен HTTPS или localhost). Откройте страницу как
-      <b>https://gigam-stt.dev.vvpreo.net</b> — там запись работает.
-      Загрузка файла ниже работает в любом случае.
+      Микрофон недоступен: нужен HTTPS или localhost. Загрузка файла работает в любом случае.
     </div>
-    <div class="hint">Запись кодируется в WAV 16 кГц прямо в браузере и по кнопке «Стоп» сразу отправляется на распознавание.</div>
   </div>
 
   <div class="card">
     <div class="drop" id="drop">
-      Перетащите аудиофайл сюда или <b>нажмите, чтобы выбрать</b><br>
-      <span style="font-size:12px">wav, mp3, flac, ogg…</span>
+      Перетащите аудиофайл или <b>нажмите, чтобы выбрать</b><br>
+      <span style="font-size:12px">wav · mp3 · flac · ogg · opus · m4a · webm · wma …</span>
     </div>
     <input type="file" id="file" accept="audio/*" hidden>
   </div>
 
-  <h2>Результаты</h2>
+  <h2 class="sect">Результаты</h2>
   <div id="results"><div class="empty">Пока пусто — запишите или загрузите аудио.</div></div>
 </div>
 
 <script>
 'use strict';
 
-/* ---------- Настройки форматов по эндпоинту ---------- */
-const FORMATS = {
-  openai: ['json', 'text', 'verbose_json', 'srt', 'vtt'],
-  asr:    ['json', 'text', 'srt', 'vtt', 'tsv'],
-};
-const endpointSel = document.getElementById('endpoint');
-const formatSel = document.getElementById('format');
-const langWrap = document.getElementById('langWrap');
+/* =============================== state =============================== */
+const $ = id => document.getElementById(id);
+let TOKEN = localStorage.getItem('stt_token') || '';
+let HEALTH = null;
 
-function fillFormats() {
-  const list = FORMATS[endpointSel.value];
-  formatSel.innerHTML = list.map(f => `<option value="${f}">${f}</option>`).join('');
-  langWrap.hidden = endpointSel.value !== 'asr';
-}
-endpointSel.addEventListener('change', fillFormats);
-fillFormats();
+const authHeaders = () => TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
 
-/* Селектор модели наполняется из /health (набор моделей инстанса) */
-const modelSel = document.getElementById('model');
-let modelsFilled = false;
-function fillModels(h) {
-  if (modelsFilled || !h.models) return;
-  modelsFilled = true;
-  modelSel.innerHTML = Object.keys(h.models).map(m =>
-    `<option value="${m}"${m === h.default_model ? ' selected' : ''}>${m}${m === h.default_model ? ' (дефолт)' : ''}</option>`
-  ).join('');
+/* =============================== gate ================================ */
+async function fetchHealth() {
+  const r = await fetch('/health');
+  return r.json();
 }
 
-/* Ключ API запоминаем в localStorage, чтобы не вводить каждый раз */
-const tokenInput = document.getElementById('token');
-tokenInput.value = localStorage.getItem('stt_token') || '';
-tokenInput.addEventListener('input', () => localStorage.setItem('stt_token', tokenInput.value.trim()));
+async function tokenValid(tok) {
+  const r = await fetch('/auth/check', { headers: tok ? { 'Authorization': 'Bearer ' + tok } : {} });
+  return r.ok;
+}
 
-/* ---------- Health ---------- */
-async function checkHealth() {
-  const dot = document.getElementById('healthDot');
-  const text = document.getElementById('healthText');
-  const detail = document.getElementById('healthDetail');
-  try {
-    const r = await fetch('/health');
-    const h = await r.json();
-    const ok = h.status === 'healthy' && h.model_loaded;
-    dot.className = 'dot ' + (ok ? 'ok' : 'err');
-    text.textContent = ok ? 'сервис готов' : 'модель не загружена';
-    detail.textContent = `engine: ${h.engine} · память процесса: ${Math.round(h.memory?.process_memory_mb ?? 0)} МБ`;
-    fillModels(h);
-  } catch (e) {
-    dot.className = 'dot err';
-    text.textContent = 'сервис недоступен';
-    detail.textContent = String(e);
+async function boot() {
+  try { HEALTH = await fetchHealth(); } catch { HEALTH = null; }
+  const needAuth = HEALTH?.auth_required !== false;
+
+  if (needAuth) {
+    if (TOKEN && await tokenValid(TOKEN)) return showApp();
+    return showGate();
+  }
+  showApp();
+}
+
+function showGate(msg) {
+  $('app').hidden = true;
+  $('gate').hidden = false;
+  $('gateErr').textContent = msg || '';
+  $('gateToken').focus();
+}
+
+$('gateBtn').addEventListener('click', tryLogin);
+$('gateToken').addEventListener('keydown', e => { if (e.key === 'Enter') tryLogin(); });
+
+async function tryLogin() {
+  const tok = $('gateToken').value.trim();
+  if (!tok) return;
+  $('gateBtn').disabled = true;
+  const ok = await tokenValid(tok).catch(() => false);
+  $('gateBtn').disabled = false;
+  if (!ok) { $('gateErr').textContent = 'Неверный токен'; return; }
+  TOKEN = tok;
+  localStorage.setItem('stt_token', tok);
+  showApp();
+}
+
+function logout() {
+  localStorage.removeItem('stt_token');
+  TOKEN = '';
+  showGate();
+}
+$('logoutBtn').addEventListener('click', logout);
+
+function showApp() {
+  $('gate').hidden = true;
+  $('app').hidden = false;
+  $('logoutBtn').hidden = !(HEALTH?.auth_required);
+  renderHealth();
+  fillModels();
+  fillFormats();
+  setInterval(async () => { try { HEALTH = await fetchHealth(); renderHealth(); } catch {} }, 15000);
+}
+
+/* =============================== health ============================== */
+function renderHealth() {
+  const h = HEALTH;
+  const ok = h && h.status === 'healthy' && h.model_loaded;
+  $('healthDot').className = 'dot ' + (ok ? 'ok' : 'err');
+  $('healthText').textContent = ok ? 'сервис готов' : (h ? 'модель не загружена' : 'недоступен');
+  if (h) {
+    $('healthDetail').textContent =
+      `engine: ${h.engine} · модели: ${Object.keys(h.models || {}).join(', ')} · ` +
+      `RAM: ${Math.round(h.memory?.process_memory_mb ?? 0)} МБ · очередь: ${h.pending_requests ?? 0}`;
+    $('emoWrap').hidden = !h.emotions_enabled;
+    $('docsLinks').hidden = !h.docs_enabled;
   }
 }
-checkHealth();
-setInterval(checkHealth, 15000);
 
-/* ---------- Запись с микрофона -> WAV 16 кГц ---------- */
-const recBtn = document.getElementById('recBtn');
-const timerEl = document.getElementById('timer');
-const recStatus = document.getElementById('recStatus');
-let rec = null; // {ctx, stream, node, src, chunks, sampleRate, startedAt, timerId}
+/* =============================== options ============================= */
+const FORMATS = {
+  openai: [
+    ['json', 'json — {"text": …}'],
+    ['verbose_json', 'verbose_json — сегменты и слова'],
+    ['text', 'text — просто текст'],
+    ['srt', 'srt — субтитры'],
+    ['vtt', 'vtt — субтитры'],
+  ],
+  native: [
+    ['json', 'json — сегменты, метрики'],
+    ['text', 'text'],
+    ['srt', 'srt'],
+    ['vtt', 'vtt'],
+    ['tsv', 'tsv'],
+  ],
+};
 
-if (!navigator.mediaDevices?.getUserMedia) {
-  recBtn.disabled = true;
-  document.getElementById('micWarn').hidden = false;
+function fillModels() {
+  const models = Object.keys(HEALTH?.models || {});
+  $('model').innerHTML = models.map(m =>
+    `<option value="${m}"${m === HEALTH.default_model ? ' selected' : ''}>${m}${m === HEALTH.default_model ? ' (дефолт)' : ''}</option>`
+  ).join('') || '<option value="">по умолчанию</option>';
 }
 
-recBtn.addEventListener('click', () => rec ? stopRecording() : startRecording());
+function fillFormats() {
+  const ep = $('endpoint').value;
+  $('format').innerHTML = FORMATS[ep].map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  $('langWrap').hidden = ep !== 'native';
+  updateHint();
+}
+$('endpoint').addEventListener('change', fillFormats);
+$('format').addEventListener('change', updateHint);
+$('wordTs').addEventListener('change', updateHint);
+
+function updateHint() {
+  const ep = $('endpoint').value, fmt = $('format').value, wts = $('wordTs').checked;
+  let hint = '';
+  if (ep === 'openai' && wts && fmt !== 'verbose_json')
+    hint = 'Слова в OpenAI-контракте возвращаются только в формате verbose_json.';
+  if (ep === 'native' && wts && fmt !== 'json')
+    hint = 'Слова в нативном контракте возвращаются только в формате json.';
+  $('fmtHint').textContent = hint;
+}
+
+/* ========================== запись микрофона ========================= */
+let rec = null;
+if (!navigator.mediaDevices?.getUserMedia) { $('recBtn').disabled = true; $('micWarn').hidden = false; }
+$('recBtn').addEventListener('click', () => rec ? stopRecording() : startRecording());
 
 async function startRecording() {
   let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (e) {
-    recStatus.textContent = 'нет доступа к микрофону: ' + e.message;
-    return;
-  }
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { $('recStatus').textContent = 'нет доступа к микрофону: ' + e.message; return; }
   const ctx = new AudioContext();
   const src = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const chunks = [];
   node.onaudioprocess = ev => chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
-  src.connect(node);
-  node.connect(ctx.destination);
-
+  src.connect(node); node.connect(ctx.destination);
   rec = { ctx, stream, node, src, chunks, sampleRate: ctx.sampleRate, startedAt: Date.now() };
   rec.timerId = setInterval(() => {
     const s = Math.floor((Date.now() - rec.startedAt) / 1000);
-    timerEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    $('timer').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }, 250);
-
-  recBtn.textContent = '⏹ Стоп и распознать';
-  recBtn.className = 'rec-on';
-  timerEl.hidden = false;
-  timerEl.textContent = '0:00';
-  recStatus.textContent = 'запись…';
+  $('recBtn').textContent = '⏹ Стоп и распознать'; $('recBtn').className = 'rec-on';
+  $('timer').hidden = false; $('timer').textContent = '0:00'; $('recStatus').textContent = 'запись…';
 }
 
 function stopRecording() {
   const { ctx, stream, node, src, chunks, sampleRate, timerId } = rec;
-  clearInterval(timerId);
-  node.disconnect(); src.disconnect();
-  stream.getTracks().forEach(t => t.stop());
-  ctx.close();
-  rec = null;
-
-  recBtn.textContent = '🎙 Записать с микрофона';
-  recBtn.className = 'primary';
-  timerEl.hidden = true;
-  recStatus.textContent = '';
-
+  clearInterval(timerId); node.disconnect(); src.disconnect();
+  stream.getTracks().forEach(t => t.stop()); ctx.close(); rec = null;
+  $('recBtn').textContent = '🎙 Записать с микрофона'; $('recBtn').className = 'primary';
+  $('timer').hidden = true; $('recStatus').textContent = '';
   const total = chunks.reduce((n, c) => n + c.length, 0);
-  if (!total) { recStatus.textContent = 'пустая запись'; return; }
+  if (!total) { $('recStatus').textContent = 'пустая запись'; return; }
   const pcm = new Float32Array(total);
-  let off = 0;
-  for (const c of chunks) { pcm.set(c, off); off += c.length; }
-
+  let off = 0; for (const c of chunks) { pcm.set(c, off); off += c.length; }
   const wav = encodeWav(downsample(pcm, sampleRate, 16000), 16000);
-  transcribe(new Blob([wav], { type: 'audio/wav' }), 'recording.wav', total / sampleRate);
+  transcribe(new Blob([wav], { type: 'audio/wav' }), 'recording.wav');
 }
 
 function downsample(pcm, from, to) {
   if (from === to) return pcm;
-  const ratio = from / to;
-  const out = new Float32Array(Math.floor(pcm.length / ratio));
+  const ratio = from / to, out = new Float32Array(Math.floor(pcm.length / ratio));
   for (let i = 0; i < out.length; i++) {
-    const start = Math.floor(i * ratio), end = Math.min(Math.floor((i + 1) * ratio), pcm.length);
-    let sum = 0;
-    for (let j = start; j < end; j++) sum += pcm[j];
-    out[i] = sum / (end - start || 1);
+    const s = Math.floor(i * ratio), e = Math.min(Math.floor((i + 1) * ratio), pcm.length);
+    let sum = 0; for (let j = s; j < e; j++) sum += pcm[j];
+    out[i] = sum / (e - s || 1);
   }
   return out;
 }
 
 function encodeWav(pcm, sampleRate) {
-  const buf = new ArrayBuffer(44 + pcm.length * 2);
-  const v = new DataView(buf);
+  const buf = new ArrayBuffer(44 + pcm.length * 2), v = new DataView(buf);
   const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
   str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVE');
   str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
@@ -311,104 +371,149 @@ function encodeWav(pcm, sampleRate) {
   return buf;
 }
 
-/* ---------- Загрузка файла ---------- */
-const drop = document.getElementById('drop');
-const fileInput = document.getElementById('file');
-drop.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', () => {
-  if (fileInput.files[0]) transcribe(fileInput.files[0], fileInput.files[0].name);
-  fileInput.value = '';
+/* ============================ файл / dnd ============================= */
+$('drop').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', () => {
+  if ($('file').files[0]) transcribe($('file').files[0], $('file').files[0].name);
+  $('file').value = '';
 });
-['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
-['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', e => {
-  const f = e.dataTransfer.files[0];
-  if (f) transcribe(f, f.name);
-});
+['dragover', 'dragenter'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
+$('drop').addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) transcribe(f, f.name); });
 
-/* ---------- Отправка и вывод ---------- */
-const resultsEl = document.getElementById('results');
+/* ============================ transcribe ============================= */
+async function transcribe(blob, filename) {
+  const ep = $('endpoint').value, fmt = $('format').value, mdl = $('model').value;
+  const wts = $('wordTs').checked, emo = $('emoOn').checked && !$('emoWrap').hidden;
 
-async function transcribe(blob, filename, knownDuration) {
-  const endpoint = endpointSel.value;
-  const fmt = formatSel.value;
-  const token = tokenInput.value.trim();
-
-  const empty = resultsEl.querySelector('.empty');
+  const empty = document.querySelector('#results .empty');
   if (empty) empty.remove();
-
   const card = document.createElement('div');
   card.className = 'card';
-  card.innerHTML = `<div class="status"><span class="spin"></span>Распознаю <b>${escapeHtml(filename)}</b>…</div>`;
-  resultsEl.prepend(card);
+  card.innerHTML = `<div class="status"><span class="spin"></span>Распознаю <b>${esc(filename)}</b>…</div>`;
+  $('results').prepend(card);
 
-  const mdl = modelSel.value;
   let url, fd = new FormData();
-  if (endpoint === 'openai') {
+  if (ep === 'openai') {
     url = '/v1/audio/transcriptions';
     fd.append('file', blob, filename);
     fd.append('response_format', fmt);
     if (mdl) fd.append('model', mdl);
+    if (wts) { fd.append('timestamp_granularities[]', 'word'); fd.append('timestamp_granularities[]', 'segment'); }
   } else {
-    url = `/gigaam/asr?output=${fmt}&language=${document.getElementById('lang').value}`
+    url = `/gigaam/asr?output=${fmt}&language=${$('lang').value}&word_timestamps=${wts}`
         + (mdl ? `&model=${mdl}` : '');
     fd.append('audio_file', blob, filename);
   }
 
-  const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+  // эмоции — параллельным запросом
+  let emoPromise = null;
+  if (emo) {
+    const efd = new FormData();
+    efd.append('audio_file', blob, filename);
+    emoPromise = fetch('/gigaam/emotion', { method: 'POST', body: efd, headers: authHeaders() })
+      .then(r => r.ok ? r.json() : r.text().then(t => ({ error: t })))
+      .catch(e => ({ error: String(e) }));
+  }
+
   const t0 = performance.now();
-  let bodyText, status, err = null;
+  let bodyText = '', err = null, status = 0;
   try {
-    const resp = await fetch(url, { method: 'POST', body: fd, headers });
+    const resp = await fetch(url, { method: 'POST', body: fd, headers: authHeaders() });
     status = resp.status;
     bodyText = await resp.text();
+    if (resp.status === 401) { showGate('Сессия истекла — введите токен заново'); }
     if (!resp.ok) err = `HTTP ${resp.status}`;
-  } catch (e) {
-    err = String(e);
-  }
+  } catch (e) { err = String(e); }
   const elapsed = (performance.now() - t0) / 1000;
+  const emoData = emoPromise ? await emoPromise : null;
+  const duration = await audioDuration(blob);
 
-  // Длительность аудио: из записи или best-effort декодированием файла
-  let duration = knownDuration;
-  if (duration == null) duration = await audioDuration(blob);
-
-  let mainText = bodyText, raw = null;
-  if (!err && (fmt === 'json' || fmt === 'verbose_json')) {
-    try { raw = JSON.parse(bodyText); mainText = raw.text ?? bodyText; } catch {}
-  }
-
-  const meta = [`⏱ ${elapsed.toFixed(2)} с`];
-  if (duration) {
-    meta.push(`🎧 аудио ${duration.toFixed(1)} с`);
-    meta.push(`⚡ ${(duration / elapsed).toFixed(1)}× реального времени`);
-  }
-  meta.push(`${endpoint === 'openai' ? '/v1/audio/transcriptions' : '/gigaam/asr'} · ${fmt}${mdl ? ' · ' + mdl : ''}`);
-
-  const audioUrl = URL.createObjectURL(blob);
-  card.innerHTML = err
-    ? `<div class="meta" style="color:var(--err)">Ошибка: ${escapeHtml(err)}</div>
-       <pre>${escapeHtml(bodyText || '')}</pre>`
-    : `<div class="result-text">${escapeHtml(mainText).trim() || '<i>(пусто)</i>'}</div>
-       <div class="meta">${meta.map(escapeHtml).join(' · ')}</div>
-       <audio controls src="${audioUrl}"></audio>
-       ${raw ? `<details><summary>сырой JSON-ответ</summary><pre>${escapeHtml(JSON.stringify(raw, null, 2))}</pre></details>` : ''}`;
+  renderResult(card, { blob, filename, ep, fmt, mdl, wts, err, bodyText, elapsed, duration, emoData });
 }
 
+/* ============================== render =============================== */
+function renderResult(card, r) {
+  if (r.err) {
+    card.innerHTML = `<div class="meta" style="color:var(--err)">Ошибка: ${esc(r.err)}</div><pre>${esc(r.bodyText || '')}</pre>`;
+    return;
+  }
+
+  let raw = null, mainText = r.bodyText, words = [], segments = [];
+  const isJson = (r.fmt === 'json' || r.fmt === 'verbose_json');
+  if (isJson) {
+    try {
+      raw = JSON.parse(r.bodyText);
+      mainText = raw.text ?? r.bodyText;
+      segments = raw.segments || [];
+      words = raw.words || segments.flatMap(s => s.words || []);
+      // native: у слов поле word, у openai тоже word — унифицировано
+    } catch {}
+  }
+
+  const meta = [`⏱ ${r.elapsed.toFixed(2)} с`];
+  if (r.duration) { meta.push(`🎧 ${r.duration.toFixed(1)} с`); meta.push(`⚡ ${(r.duration / r.elapsed).toFixed(1)}×`); }
+  meta.push(r.ep === 'openai' ? '/v1/audio/transcriptions' : '/gigaam/asr');
+  meta.push(r.fmt);
+  if (r.mdl) meta.push(r.mdl);
+
+  let html = '';
+  const subtitle = ['srt', 'vtt', 'tsv'].includes(r.fmt);
+  html += `<div class="result-text${subtitle ? ' mono' : ''}">${esc(mainText).trim() || '<i>(пусто)</i>'}</div>`;
+  html += `<div class="meta">${meta.map(esc).join(' · ')}</div>`;
+
+  if (words.length) {
+    html += `<details open><summary>слова с таймстемпами (${words.length})</summary><div class="words">`
+      + words.map(w => `<span class="word">${esc(w.word)}<small>${(+w.start).toFixed(2)}–${(+w.end).toFixed(2)}</small></span>`).join('')
+      + `</div></details>`;
+  }
+  if (segments.length > 1) {
+    html += `<details><summary>сегменты (${segments.length})</summary>`
+      + segments.map(s => `<div class="seg-line">[${fmtT(s.start)} – ${fmtT(s.end)}] <b>${esc(s.text)}</b></div>`).join('')
+      + `</details>`;
+  }
+
+  if (r.emoData) {
+    if (r.emoData.error) {
+      html += `<div class="warn">Эмоции: ${esc(String(r.emoData.error)).slice(0, 200)}</div>`;
+    } else {
+      const EMOJI = { angry: '😠', sad: '😢', neutral: '😐', positive: '😊' };
+      const RU = { angry: 'злость', sad: 'грусть', neutral: 'нейтрально', positive: 'позитив' };
+      html += `<details open><summary>эмоции · доминирует: ${EMOJI[r.emoData.dominant] || ''} ${RU[r.emoData.dominant] || r.emoData.dominant}</summary><div class="emotions">`
+        + Object.entries(r.emoData.emotions).map(([k, v]) =>
+          `<div class="emo-row${k === r.emoData.dominant ? ' dominant' : ''}">
+             <span>${EMOJI[k] || ''} ${RU[k] || k}</span>
+             <div class="emo-bar"><div class="emo-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
+             <span>${(v * 100).toFixed(1)}%</span></div>`).join('')
+        + `</div></details>`;
+    }
+  }
+
+  html += `<audio controls src="${URL.createObjectURL(r.blob)}"></audio>`;
+  if (raw) html += `<details><summary>сырой ответ</summary><pre>${esc(JSON.stringify(raw, null, 2))}</pre></details>`;
+  card.innerHTML = html;
+}
+
+/* =============================== utils =============================== */
+function fmtT(sec) {
+  sec = +sec || 0;
+  const m = Math.floor(sec / 60), s = (sec % 60).toFixed(1);
+  return `${m}:${String(s).padStart(4, '0')}`;
+}
 function audioDuration(blob) {
   return new Promise(resolve => {
-    const a = new Audio();
-    a.preload = 'metadata';
+    const a = new Audio(); a.preload = 'metadata';
     a.onloadedmetadata = () => resolve(isFinite(a.duration) ? a.duration : null);
     a.onerror = () => resolve(null);
     a.src = URL.createObjectURL(blob);
     setTimeout(() => resolve(null), 3000);
   });
 }
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+boot();
 </script>
 </body>
 </html>
