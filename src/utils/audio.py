@@ -6,6 +6,8 @@
 
 import io
 import logging
+import subprocess
+import tempfile
 from typing import Tuple
 
 import numpy as np
@@ -39,14 +41,15 @@ def load_audio_from_file(audio_content: bytes) -> np.ndarray:
     audio_buffer = io.BytesIO(audio_content)
 
     try:
-        # Try soundfile first (faster, supports wav/flac/ogg)
+        # Try soundfile first (faster; wav/flac/ogg/opus/mp3 via libsndfile)
         audio_data, sample_rate = sf.read(audio_buffer)
         logger.debug(f"Audio loaded with soundfile: {sample_rate}Hz")
     except Exception as e:
-        # Fallback to librosa (supports more formats including mp3)
-        logger.debug(f"soundfile failed ({e}), falling back to librosa")
-        audio_buffer.seek(0)
-        audio_data, sample_rate = librosa.load(audio_buffer, sr=None, mono=True)
+        # Fallback to ffmpeg (m4a/aac, webm, wma и всё остальное).
+        # Декодирует сразу в 16kHz mono float32 — ресемплинг не нужен.
+        logger.debug(f"soundfile failed ({e}), falling back to ffmpeg")
+        audio_data = _decode_with_ffmpeg(audio_content)
+        sample_rate = SAMPLE_RATE
 
     # Free the BytesIO buffer immediately — no longer needed
     audio_buffer.close()
@@ -74,6 +77,35 @@ def load_audio_from_file(audio_content: bytes) -> np.ndarray:
     if audio_data.dtype != np.float32:
         return audio_data.astype(np.float32)
     return audio_data
+
+
+def _decode_with_ffmpeg(audio_content: bytes) -> np.ndarray:
+    """
+    Декодирует аудио через ffmpeg (временный файл -> raw float32 16kHz mono).
+
+    Используется как фолбэк для форматов, которые не умеет libsndfile
+    (m4a/aac, webm, wma, ...). Требует бинарь `ffmpeg` (есть в образе).
+    Вход подаётся через временный файл, а не stdin: MP4/M4A с `moov atom`
+    в конце файла из неперематываемого pipe не декодируется.
+
+    Raises:
+        RuntimeError: Если ffmpeg не смог декодировать данные.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".audio") as tmp:
+        tmp.write(audio_content)
+        tmp.flush()
+        cmd = [
+            "ffmpeg", "-nostdin", "-loglevel", "error",
+            "-i", tmp.name,
+            "-f", "f32le", "-ac", "1", "-ar", str(SAMPLE_RATE),
+            "pipe:1",
+        ]
+        proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode != 0 or not proc.stdout:
+        stderr = proc.stderr.decode(errors="replace").strip().splitlines()
+        detail = stderr[-1] if stderr else "unknown error"
+        raise RuntimeError(f"ffmpeg failed to decode audio: {detail}")
+    return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 
 def get_audio_duration(audio_data: np.ndarray) -> float:

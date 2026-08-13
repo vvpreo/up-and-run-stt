@@ -19,10 +19,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/data \
     TORCH_HOME=/app/data/torch
 
-# Install system dependencies
+# Install system dependencies.
+# ffmpeg — фолбэк-декодер для форматов, которые не умеет libsndfile
+# (m4a/aac, webm, wma и т.п.); см. src/utils/audio.py.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libgomp1 \
+    ffmpeg \
     git \
     && rm -rf /var/lib/apt/lists/*
 
