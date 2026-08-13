@@ -1,0 +1,30 @@
+# Зависимости сервиса gigaam-stt (GigaAM native, CPU).
+# Образ собирается по Dockerfile.cpu (там свой список pip install по слоям);
+# этот файл — для локальной разработки/IDE. Списки должны совпадать по составу.
+
+torch>=2.11.0
+torchaudio>=2.11.0
+
+# Web framework
+fastapi
+uvicorn
+pydantic
+python-multipart
+
+# Audio
+soundfile
+librosa
+scipy
+
+# GigaAM native
+hydra-core
+omegaconf
+sentencepiece
+
+# Service
+psutil  # memory monitoring in /health
+tqdm
+
+# NumPy (version depends on Python version)
+numpy>=2.0.2,<2.1.0; python_version <'3.13'
+numpy>=2.1.0,<2.5.0; python_version >='3.13'

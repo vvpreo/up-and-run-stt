@@ -1,0 +1,295 @@
+"""
+Маршрут основного ASR эндпоинта.
+Предоставляет эндпоинт /asr для транскрипции аудиофайлов
+с поддержкой различных форматов вывода.
+"""
+
+import logging
+from typing import TYPE_CHECKING, Optional
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse
+
+from src.asr.registry import resolve_model
+from src.auth import verify_token
+
+from src.config import (
+    ENGINE,
+    CONFIDENCE_FILTER_ENABLED,
+    DEFAULT_LANGUAGE,
+    SAMPLE_RATE,
+    MAX_CHARS_PER_SECOND,
+    CHARS_PER_SECOND_MULTIPLIER,
+    CHARS_PER_SECOND_MIN_AUDIO_SEC,
+)
+
+from src.models.schemas import TranscriptionResponse, ConfidenceMetrics
+from src.services.debug import save_debug_log
+from src.services.timeout import TranscriptionTimeoutError, transcribe_with_timeout
+from src.utils.audio import load_audio_from_file
+from src.utils.formatters import format_srt, format_tsv, format_vtt
+
+if TYPE_CHECKING:
+    from src.asr.base import ASRModel
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["ASR"])
+
+# Reference to global ASR model (will be set by app)
+_asr_model: "ASRModel | None" = None
+
+
+def set_asr_model(model: "ASRModel") -> None:
+    """
+    Устанавливает ссылку на глобальную ASR модель.
+
+    Args:
+        model: Экземпляр ASR модели.
+    """
+    global _asr_model
+    _asr_model = model
+
+
+@router.post("/gigaam/asr", dependencies=[Depends(verify_token)])
+async def transcribe(
+    audio_file: UploadFile = File(..., description="Audio file to transcribe"),
+    model: Optional[str] = Query(None, description="GigaAM variant from the instance set (e.g. v3_e2e_ctc); empty -> default model"),
+    output: str = Query("json", description="Output format: text, json, vtt, srt, tsv"),
+    task: str = Query("transcribe", description="Task: transcribe or translate"),
+    language: Optional[str] = Query(None, description="Language code (e.g., 'russian', 'en')"),
+    word_timestamps: bool = Query(True, description="Include word-level timestamps"),
+    encode: bool = Query(False, description="Whether audio needs encoding (ignored, handled automatically)"),
+):
+    """
+    Транскрибирует аудиофайл движком GigaAM (нативный endpoint).
+
+    Вариант модели выбирается query-параметром `model` из набора инстанса
+    (GIGAAM_MODELS); без параметра — модель по умолчанию.
+
+    Args:
+        audio_file: Аудиофайл для транскрипции.
+        model: Вариант модели (например, v3_e2e_ctc); пусто = дефолт.
+        output: Формат вывода:
+            - "text": Только текст
+            - "json": JSON с сегментами и метаданными
+            - "vtt": WebVTT субтитры
+            - "srt": SRT субтитры
+            - "tsv": Tab-separated values
+        task: Задача - "transcribe" или "translate".
+        language: Код языка (например, "en", "ru", "russian").
+        word_timestamps: Включить временные метки слов.
+        encode: Устаревший параметр (игнорируется).
+
+    Returns:
+        Результат транскрипции в выбранном формате.
+
+    Raises:
+        HTTPException(503): Если модель не загружена.
+        HTTPException(408): Если превышен таймаут транскрипции.
+        HTTPException(400): Если указан неподдерживаемый формат вывода.
+        HTTPException(500): При внутренней ошибке.
+    """
+    # Выбор модели из реестра инстанса (пусто -> модель по умолчанию)
+    selected_model = resolve_model(model)
+
+    try:
+        # Read audio file
+        audio_content = await audio_file.read()
+        logger.info(
+            f"Received audio file: {audio_file.filename}, "
+            f"size: {len(audio_content)} bytes"
+        )
+
+        # Convert audio to numpy array
+        audio_data = load_audio_from_file(audio_content)
+        del audio_content
+        audio_duration_sec = len(audio_data) / SAMPLE_RATE
+        logger.info(
+            f"Audio converted: {len(audio_data)} samples at {SAMPLE_RATE}Hz, "
+            f"duration: {audio_duration_sec:.2f}s"
+        )
+
+        # Use default language if not specified
+        effective_language = language if language else DEFAULT_LANGUAGE
+
+        # Run transcription with adaptive timeout
+        try:
+            result, elapsed_time = transcribe_with_timeout(
+                asr_model=selected_model,
+                audio=audio_data,
+                audio_duration_sec=audio_duration_sec,
+                task=task,
+                language=effective_language,
+                word_timestamps=word_timestamps,
+                output=output,
+            )
+        except TranscriptionTimeoutError as e:
+            logger.error(f"Transcription timeout: {e}")
+            raise HTTPException(
+                status_code=408,
+                detail=(
+                    f"Transcription timed out after {e.elapsed:.1f}s "
+                    f"(expected {e.expected:.1f}s). "
+                    f"This may indicate audio issues or model hallucination."
+                ),
+            )
+
+        # Calculate speed ratio (how many times faster than realtime)
+        speed_ratio = audio_duration_sec / elapsed_time if elapsed_time > 0 else 0
+        logger.info(
+            f"Transcription completed: duration={elapsed_time:.3f}s, "
+            f"audio={audio_duration_sec:.2f}s, speed={speed_ratio:.1f}x realtime"
+        )
+
+        # Save debug log if enabled
+        save_debug_log(audio_data, result, audio_file.filename)
+
+        # Compute overall characters-per-second and update confidence metrics
+        if isinstance(result, TranscriptionResponse):
+            total_chars = len(result.text) if result.text else 0
+            chars_per_sec = total_chars / audio_duration_sec if audio_duration_sec > 0 else None
+
+            # Ensure ConfidenceMetrics exists so we can augment it
+            if result.confidence is None:
+                result.confidence = ConfidenceMetrics()
+
+            # Store per-response and per-confidence values
+            result.chars_per_second = round(chars_per_sec, 4) if chars_per_sec is not None else None
+            result.confidence.chars_per_second = round(chars_per_sec, 4) if chars_per_sec is not None else None
+
+            # Compute threshold and ratio information for diagnostics
+            threshold = MAX_CHARS_PER_SECOND * CHARS_PER_SECOND_MULTIPLIER
+            result.confidence.chars_per_second_threshold = round(threshold, 4)
+            if MAX_CHARS_PER_SECOND and chars_per_sec is not None:
+                result.confidence.chars_per_second_ratio = round(chars_per_sec / MAX_CHARS_PER_SECOND, 4)
+            else:
+                result.confidence.chars_per_second_ratio = None
+
+            # If observed chars/sec is many times above baseline, mark as suspicious
+            if (
+                chars_per_sec is not None
+                and audio_duration_sec >= CHARS_PER_SECOND_MIN_AUDIO_SEC
+                and MAX_CHARS_PER_SECOND > 0
+                and result.confidence.chars_per_second_ratio is not None
+                and result.confidence.chars_per_second_ratio > CHARS_PER_SECOND_MULTIPLIER
+            ):
+                result.confidence.high_char_rate = True
+                result.confidence.is_reliable = False
+                if not result.confidence.rejection_reasons:
+                    result.confidence.rejection_reasons = []
+                result.confidence.rejection_reasons.append(
+                    f"chars_per_second={chars_per_sec:.2f} > threshold={threshold:.2f}"
+                )
+                logger.warning(
+                    f"High characters/sec detected: {chars_per_sec:.2f} chars/s (threshold={threshold:.2f})"
+                )
+
+        # Check confidence and optionally filter low-quality results
+        if isinstance(result, TranscriptionResponse) and result.confidence:
+            conf = result.confidence
+            if not conf.is_reliable:
+                reasons = (
+                    ", ".join(conf.rejection_reasons)
+                    if conf.rejection_reasons
+                    else "unknown"
+                )
+                logger.warning(f"Low confidence transcription: {reasons}")
+
+                if CONFIDENCE_FILTER_ENABLED:
+                    logger.info("Filtering out low-confidence result (returning empty)")
+                    # Return empty result for low-confidence transcriptions
+                    if output == "text":
+                        return PlainTextResponse(content="")
+                    elif output == "json":
+                        empty_result = TranscriptionResponse(
+                            text="",
+                            language=result.language,
+                            segments=[],
+                            confidence=conf,
+                        )
+                        return JSONResponse(
+                            content=empty_result.model_dump(exclude_none=True),
+                            headers={
+                                "Asr-Engine": ENGINE,
+                                "X-Confidence-Filtered": "true",
+                            },
+                        )
+                    else:
+                        return PlainTextResponse(content="")
+
+        # Format response based on output type
+        return _format_response(result, output)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Transcription error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _format_response(
+    result: TranscriptionResponse | str,
+    output: str,
+):
+    """
+    Форматирует ответ в зависимости от типа вывода.
+
+    Args:
+        result: Результат транскрипции.
+        output: Формат вывода.
+
+    Returns:
+        Отформатированный HTTP ответ.
+
+    Raises:
+        HTTPException: Если формат вывода не поддерживается.
+    """
+    if output == "text":
+        if isinstance(result, str):
+            return PlainTextResponse(content=result)
+        return PlainTextResponse(content=result.text)
+
+    elif output == "json":
+        if isinstance(result, TranscriptionResponse):
+            return JSONResponse(
+                content=result.model_dump(exclude_none=True),
+                headers={"Asr-Engine": ENGINE},
+            )
+        return JSONResponse(
+            content={"text": str(result)},
+            headers={"Asr-Engine": ENGINE},
+        )
+
+    elif output == "vtt":
+        if isinstance(result, str):
+            return PlainTextResponse(content=result, media_type="text/vtt")
+        return PlainTextResponse(
+            content=format_vtt(result),
+            media_type="text/vtt",
+        )
+
+    elif output == "srt":
+        if isinstance(result, str):
+            return PlainTextResponse(content=result, media_type="text/plain")
+        return PlainTextResponse(
+            content=format_srt(result),
+            media_type="text/plain",
+        )
+
+    elif output == "tsv":
+        if isinstance(result, str):
+            return PlainTextResponse(
+                content=result,
+                media_type="text/tab-separated-values",
+            )
+        return PlainTextResponse(
+            content=format_tsv(result),
+            media_type="text/tab-separated-values",
+        )
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported output format: {output}",
+        )

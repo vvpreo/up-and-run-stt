@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""
+Точка входа для запуска сервиса распознавания речи (GigaAM native).
+
+Usage:
+    python main.py
+
+Environment Variables:
+    GIGAAM_MODELS: comma-separated model set (v3_e2e_ctc,v3_e2e_rnnt,...); first = default
+    HOST: Host to bind the server (default: 0.0.0.0)
+    PORT: Port to bind the server (default: 9007)
+    DEVICE: Device to use (auto, cuda, cpu, mps)
+
+See README.md for full configuration options.
+"""
+
+import logging
+import sys
+
+# Configure logging before importing other modules
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
+
+def setup_torch_serialization():
+    """
+    Настраивает безопасные глобальные переменные для torch.load.
+
+    Необходимо для загрузки моделей pyannote и других библиотек,
+    которые сохраняют объекты с кастомными классами.
+    """
+    import collections
+    import typing
+
+    try:
+        import torch
+        import omegaconf
+        import pyannote.audio
+    except ImportError as e:
+        logger.info(f"torch/pyannote not installed, skipping torch serialization setup: {e}")
+        return
+
+    # Add safe globals for torch.load
+    safe_globals = [
+        omegaconf.listconfig.ListConfig,
+        omegaconf.base.ContainerMetadata,
+        omegaconf.nodes.AnyNode,
+        omegaconf.base.Metadata,
+        typing.Any,
+        list,
+        dict,
+        int,
+        collections.defaultdict,
+        torch.torch_version.TorchVersion,
+        pyannote.audio.core.model.Introspection,
+        pyannote.audio.core.task.Specifications,
+        pyannote.audio.core.task.Problem,
+        pyannote.audio.core.task.Resolution,
+    ]
+
+    for cls in safe_globals:
+        torch.serialization.add_safe_globals([cls])
+
+
+def main():
+    """Главная функция запуска сервиса."""
+    logger.info("=" * 60)
+    logger.info("gigaam-stt — GigaAM speech-to-text service")
+    logger.info("=" * 60)
+
+    # Import config to trigger cache directory initialization
+    from src.config import GIGAAM_MODELS, DEFAULT_MODEL, HOST, PORT, DEVICE
+
+    logger.info(f"Configuration:")
+    logger.info(f"  Models: {', '.join(GIGAAM_MODELS)} (default: {DEFAULT_MODEL})")
+    logger.info(f"  Device: {DEVICE}")
+    logger.info(f"  Server: {HOST}:{PORT}")
+    logger.info("=" * 60)
+
+    # Setup torch serialization for safe model loading
+    try:
+        setup_torch_serialization()
+    except Exception as e:
+        logger.warning(f"Failed to setup torch serialization: {e}")
+
+    # Start memory monitoring if enabled
+    from src.config import MEMORY_LOG_ENABLED
+    if MEMORY_LOG_ENABLED:
+        from src.services.memory_monitor import start_memory_monitor, stop_memory_monitor
+        start_memory_monitor()
+        logger.info("Memory monitoring enabled")
+    else:
+        stop_memory_monitor = None
+
+    # Import and run the application
+    try:
+        from src.app import run_server
+        run_server()
+    except KeyboardInterrupt:
+        logger.info("Server stopped by user")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Server error: {e}", exc_info=True)
+        sys.exit(1)
+    finally:
+        # Stop memory monitoring
+        if MEMORY_LOG_ENABLED and stop_memory_monitor:
+            stop_memory_monitor()
+
+
+if __name__ == "__main__":
+    main()

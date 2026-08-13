@@ -1,0 +1,91 @@
+# gigaam-stt — local Russian STT service (GigaAM, CPU-only), OpenAI-compatible API.
+#
+#   docker compose up -d        # build (first time) + start
+#   docker compose logs -f      # follow logs
+#   docker compose down         # stop
+#
+# Model weights live in the named volume `gigaam-models` (mounted at /app/data).
+# They are downloaded once on first start and survive restarts / rebuilds.
+#
+# Вся конфигурация — в блоке `environment` ниже. Значения по умолчанию для
+# большинства переменных также зашиты в образ (ENV в Dockerfile), поэтому
+# публичный запуск возможен и без compose:
+#   docker run -d -p 9007:9007 -v gigaam-models:/app/data <image>
+
+services:
+  gigaam-stt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gigaam-stt:cpu
+    container_name: gigaam-stt
+    # Bind to 0.0.0.0 so the service is reachable from the Mac host (VoiceInk),
+    # other containers (dev-nginx) and internal services.
+    ports:
+      - "0.0.0.0:9007:9007"
+    environment:
+      # --- Models ------------------------------------------------------------
+      # Набор моделей, который обслуживает инстанс (через запятую). Все они
+      # загружаются при старте (веса докачиваются в том при необходимости) и
+      # держатся в RAM (~1.4 ГБ каждая). Конкретная модель выбирается полем
+      # `model` в запросе; ПЕРВАЯ в списке — модель по умолчанию (для
+      # 'whisper-1' и пустого имени). Смена набора: правка здесь +
+      # `docker compose up -d --force-recreate` — без пересборки.
+      #   v3_e2e_ctc   — end-to-end, punctuation + normalization (fastest)
+      #   v3_e2e_rnnt  — end-to-end, punctuation + normalization, best quality, slower
+      #   v3_ctc       — no punctuation, fastest fallback for interactive dictation
+      #   v3_rnnt      — no punctuation, RNNT
+      GIGAAM_MODELS: v3_e2e_ctc,v3_e2e_rnnt
+      # Inference device. No GPU on this host — CPU only.
+      DEVICE: cpu
+      # Default language when the client does not send one. GigaAM v3 is Russian.
+      DEFAULT_LANGUAGE: ru
+
+      # --- Server ------------------------------------------------------------
+      HOST: 0.0.0.0
+      # Port INSIDE the container (the app binds this). Keep 9007 unless you know why.
+      PORT: "9007"
+
+      # --- Model lifecycle ---------------------------------------------------
+      # Cache dir for weights INSIDE the container. Mapped to the `gigaam-models`
+      # named volume, so weights persist and are not re-downloaded.
+      MODEL_CACHE_DIR: /app/data
+      # 0 = never unload the model. Keep it "warm" for low first-request latency
+      # (important for interactive dictation via VoiceInk).
+      MODEL_IDLE_TIMEOUT: "0"
+      # Number of in-process model instances. 1 is right for a single-CPU box.
+      MODEL_WORKERS: "1"
+
+      # --- Auth --------------------------------------------------------------
+      # Bearer token required on transcription endpoints.
+      # EMPTY = auth disabled (any/no key accepted).
+      AUTH_TOKEN: 43914efd3a03080f21fd47cbfe17e609612be1fee7e5f028
+
+      # --- Long-audio chunking (defaults are fine) ---------------------------
+      # Audio longer than this (seconds) is split into chunks before transcription.
+      GIGAAM_MAX_SHORT_AUDIO_SEC: "25.0"
+      # Chunk size / minimum chunk size (seconds) for the fixed-size chunker.
+      GIGAAM_CHUNK_SEC: "30"
+      GIGAAM_MIN_CHUNK_SEC: "5"
+
+      # --- CPU threading (optional) ------------------------------------------
+      # Uncomment to cap the number of threads torch/OpenMP use for inference.
+      # OMP_NUM_THREADS: "6"
+
+      # --- Misc ---------------------------------------------------------------
+      MEMORY_LOG_ENABLED: "false"
+    volumes:
+      # Persist downloaded model weights across restarts and rebuilds.
+      - gigaam-models:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9007/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # First start downloads the model before the server is ready.
+      start_period: 300s
+
+volumes:
+  gigaam-models:
+    name: gigaam-models

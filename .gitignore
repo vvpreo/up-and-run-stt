@@ -1,0 +1,18 @@
+venv
+venv-whisperx
+samples
+data
+__pycache__
+private
+private_output
+logs
+*.log
+bench_results
+
+# gigaam-stt local
+.env
+.tmp/
+.venv/
+benchmark/dataset/
+benchmark/results/
+.claude
