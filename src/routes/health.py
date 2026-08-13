@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from src.asr.registry import list_models
 from src.config import DEFAULT_MODEL, ENGINE, TIMEOUT_ENABLED
+from src.services.limits import pending_count
 from src.services.memory_monitor import memory_monitor
 from src.services.performance import performance_tracker
 from src.utils.device import get_memory_info
@@ -94,6 +95,8 @@ async def health_check() -> dict:
         # Набор моделей инстанса и их состояние; выбор — полем `model` запроса
         "models": {name: m.is_loaded() for name, m in list_models().items()},
         "default_model": DEFAULT_MODEL,
+        # Запросы в обработке/очереди (лимит — MAX_PENDING_REQUESTS)
+        "pending_requests": pending_count(),
         "timeout_enabled": TIMEOUT_ENABLED,
         "performance": perf_stats,
         "memory": memory_info,

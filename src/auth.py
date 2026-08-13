@@ -4,6 +4,7 @@
 """
 
 import logging
+import secrets
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
@@ -61,8 +62,8 @@ async def verify_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Verify the token
-    if credentials.credentials != AUTH_TOKEN:
+    # Verify the token (timing-safe comparison)
+    if not secrets.compare_digest(credentials.credentials, AUTH_TOKEN):
         logger.warning("Authentication failed: invalid token")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

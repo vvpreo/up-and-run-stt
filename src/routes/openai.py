@@ -11,8 +11,11 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+import asyncio
+
 from src.asr.registry import resolve_model
 from src.auth import verify_token
+from src.services.limits import read_upload_limited, request_slot
 
 from src.config import (
     SAMPLE_RATE,
@@ -123,49 +126,54 @@ async def openai_transcribe(
     )
 
     try:
-        # Read audio file
-        audio_content = await file.read()
+        # Read audio file (с лимитом размера — см. MAX_UPLOAD_MB)
+        audio_content = await read_upload_limited(file)
         logger.info(
             f"[OpenAI API] Received audio file: {file.filename}, "
             f"size: {len(audio_content)} bytes"
         )
 
-        # Convert audio to numpy array
-        audio_data = load_audio_from_file(audio_content)
-        del audio_content
-        audio_duration_sec = len(audio_data) / SAMPLE_RATE
-        logger.info(
-            f"[OpenAI API] Audio converted: {len(audio_data)} samples, "
-            f"duration: {audio_duration_sec:.2f}s"
-        )
-
-        # Use internal output format based on what we need
-        internal_output = "json" if want_words or response_format == "verbose_json" else "text"
-
-        # Use default language if not specified
-        effective_language = language if language else DEFAULT_LANGUAGE
-
-        # Run transcription with adaptive timeout
-        try:
-            result, elapsed_time = transcribe_with_timeout(
-                asr_model=selected_model,
-                audio=audio_data,
-                audio_duration_sec=audio_duration_sec,
-                task="transcribe",
-                language=effective_language,
-                word_timestamps=want_words,
-                output=internal_output,
+        # Слот очереди: при переполнении — 429 (см. MAX_PENDING_REQUESTS).
+        # Тяжёлая работа (декод + инференс) уводится в thread pool, чтобы
+        # не блокировать event loop: /health и прочие запросы живут.
+        with request_slot():
+            # Convert audio to numpy array
+            audio_data = await asyncio.to_thread(load_audio_from_file, audio_content)
+            del audio_content
+            audio_duration_sec = len(audio_data) / SAMPLE_RATE
+            logger.info(
+                f"[OpenAI API] Audio converted: {len(audio_data)} samples, "
+                f"duration: {audio_duration_sec:.2f}s"
             )
-        except TranscriptionTimeoutError as e:
-            logger.error(f"[OpenAI API] Transcription timeout: {e}")
-            raise HTTPException(
-                status_code=408,
-                detail=(
-                    f"Transcription timed out after {e.elapsed:.1f}s "
-                    f"(expected {e.expected:.1f}s). "
-                    f"This may indicate audio issues or model hallucination."
-                ),
-            )
+
+            # Use internal output format based on what we need
+            internal_output = "json" if want_words or response_format == "verbose_json" else "text"
+
+            # Use default language if not specified
+            effective_language = language if language else DEFAULT_LANGUAGE
+
+            # Run transcription with adaptive timeout
+            try:
+                result, elapsed_time = await asyncio.to_thread(
+                    transcribe_with_timeout,
+                    asr_model=selected_model,
+                    audio=audio_data,
+                    audio_duration_sec=audio_duration_sec,
+                    task="transcribe",
+                    language=effective_language,
+                    word_timestamps=want_words,
+                    output=internal_output,
+                )
+            except TranscriptionTimeoutError as e:
+                logger.error(f"[OpenAI API] Transcription timeout: {e}")
+                raise HTTPException(
+                    status_code=408,
+                    detail=(
+                        f"Transcription timed out after {e.elapsed:.1f}s "
+                        f"(expected {e.expected:.1f}s). "
+                        f"This may indicate audio issues or model hallucination."
+                    ),
+                )
 
         speed_ratio = audio_duration_sec / elapsed_time if elapsed_time > 0 else 0
         logger.info(

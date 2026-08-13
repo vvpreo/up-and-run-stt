@@ -84,6 +84,14 @@ COPY main.py /app/
 # Create cache directory (mount point for the models volume)
 RUN mkdir -p /app/data && chmod -R 755 /app/data
 
+# Непривилегированный пользователь (uid 1000). Владеет /app (включая точку
+# монтирования тома с весами). ВАЖНО: том, созданный ДО этого изменения,
+# принадлежит root — один раз выполните:
+#   docker run --rm -v gigaam-models:/data alpine chown -R 1000:1000 /data
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin app \
+    && chown -R app:app /app
+USER app
+
 # Expose port
 EXPOSE 9007
 

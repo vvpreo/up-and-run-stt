@@ -55,11 +55,13 @@ services:
       MODEL_IDLE_TIMEOUT: "0"
       # Number of in-process model instances. 1 is right for a single-CPU box.
       MODEL_WORKERS: "1"
+      # Uncomment to cap the number of threads torch/OpenMP use for inference.
+      OMP_NUM_THREADS: "4"
 
       # --- Auth --------------------------------------------------------------
       # Bearer token required on transcription endpoints.
       # EMPTY = auth disabled (any/no key accepted).
-      AUTH_TOKEN: 43914efd3a03080f21fd47cbfe17e609612be1fee7e5f028
+      AUTH_TOKEN: your_token
 
       # --- Long-audio chunking (defaults are fine) ---------------------------
       # Audio longer than this (seconds) is split into chunks before transcription.
@@ -69,8 +71,20 @@ services:
       GIGAAM_MIN_CHUNK_SEC: "5"
 
       # --- CPU threading (optional) ------------------------------------------
-      # Uncomment to cap the number of threads torch/OpenMP use for inference.
-      # OMP_NUM_THREADS: "6"
+
+      # --- Защита от перегрузки ------------------------------------------------
+      # Максимальный размер загружаемого аудио, МБ (0 = без лимита).
+      MAX_UPLOAD_MB: "200"
+      # Максимум одновременных/ожидающих транскрипций; сверх — 429 (0 = без лимита).
+      MAX_PENDING_REQUESTS: "8"
+
+      # --- HTTP ----------------------------------------------------------------
+      # CORS: origin'ы через запятую ('*' = все). Пусто/не задано = выключен.
+      # CORS_ORIGINS: "https://example.com"
+      # Swagger UI (/docs, /redoc): false = скрыть.
+      ENABLE_DOCS: "true"
+      # Уровень логирования: DEBUG/INFO/WARNING/ERROR.
+      LOG_LEVEL: INFO
 
       # --- Misc ---------------------------------------------------------------
       MEMORY_LOG_ENABLED: "false"

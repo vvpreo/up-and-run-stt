@@ -16,7 +16,15 @@ from src.asr.factory import create_asr_model
 from src.asr.base import ASRModel
 from src.asr.pool import ASRWorkerPool
 from src.asr.registry import set_registry, list_models
-from src.config import HOST, PORT, MODEL_WORKERS, GIGAAM_MODELS, DEFAULT_MODEL
+from src.config import (
+    HOST,
+    PORT,
+    MODEL_WORKERS,
+    GIGAAM_MODELS,
+    DEFAULT_MODEL,
+    CORS_ORIGINS,
+    ENABLE_DOCS,
+)
 from src.routes import asr_router, health_router, openai_router
 from src.routes.asr import set_asr_model as set_asr_model_asr
 from src.routes.health import set_asr_model as set_asr_model_health
@@ -122,10 +130,21 @@ def create_app() -> FastAPI:
         ),
         version=__version__,
         lifespan=lifespan,
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if ENABLE_DOCS else None,
+        redoc_url="/redoc" if ENABLE_DOCS else None,
+        openapi_url="/openapi.json" if ENABLE_DOCS else None,
     )
+
+    # CORS: включается перечислением origin'ов в env CORS_ORIGINS
+    if CORS_ORIGINS:
+        from fastapi.middleware.cors import CORSMiddleware
+
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=CORS_ORIGINS,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # Register routers
     app.include_router(health_router)

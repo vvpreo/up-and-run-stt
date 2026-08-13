@@ -169,6 +169,11 @@ ogg/vorbis, opus, m4a/aac, webm, wma** и другие. Декодировани
 | `GIGAAM_MAX_SHORT_AUDIO_SEC` | `25.0` | Длиннее — режется на чанки. |
 | `GIGAAM_CHUNK_SEC` / `GIGAAM_MIN_CHUNK_SEC` | `30` / `5` | Размер чанков для длинного аудио. |
 | `OMP_NUM_THREADS` | *(не задан)* | Ограничение потоков torch/OpenMP (по умолчанию = число физ. ядер). |
+| `MAX_UPLOAD_MB` | `200` | Лимит размера загружаемого аудио; сверх — `413`. `0` = без лимита. |
+| `MAX_PENDING_REQUESTS` | `8` | Лимит одновременных/ожидающих транскрипций; сверх — `429`. `0` = без лимита. |
+| `CORS_ORIGINS` | *(пусто)* | CORS-origin'ы через запятую (`*` = все). Пусто = CORS выключен. |
+| `ENABLE_DOCS` | `true` | `false` — скрыть `/docs`, `/redoc`, `/openapi.json`. |
+| `LOG_LEVEL` | `INFO` | Уровень логирования (DEBUG/INFO/WARNING/ERROR). |
 
 ### Модели: набор инстанса и выбор в запросе
 
@@ -230,6 +235,10 @@ curl -s "http://localhost:9007/gigaam/asr?model=v3_e2e_rnnt&output=json" \
 ```bash
 docker run --rm -v gigaam-models:/data alpine ls -lh /data/gigaam
 ```
+
+> Контейнер работает от непривилегированного пользователя (uid 1000). Если том
+> с весами был создан старой (root) версией образа, один раз выполните:
+> `docker run --rm -v gigaam-models:/data alpine chown -R 1000:1000 /data`.
 
 ---
 
@@ -347,6 +356,20 @@ curl -s localhost:9007/v1/audio/transcriptions \
   -H "Authorization: Bearer <AUTH_TOKEN>" \
   -F "file=@sample-data/Sobolev_Andrey_1_0_00-2_17.ogg" -F "response_format=text"
 ```
+
+## Тесты
+
+Интеграционные тесты ходят в работающий сервис (`docker compose up -d`,
+дождаться `model_loaded: true`):
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest tests/ -v
+```
+
+Покрытие: /health, авторизация, оба эндпоинта, реестр моделей, все входные
+форматы, лимит размера (`413`), backpressure (`429`), живость event loop во
+время транскрипции. Другой адрес сервиса — через `STT_BASE_URL` / `STT_AUTH_TOKEN`.
 
 ## Troubleshooting
 

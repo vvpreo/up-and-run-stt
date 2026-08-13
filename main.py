@@ -17,9 +17,11 @@ See README.md for full configuration options.
 import logging
 import sys
 
-# Configure logging before importing other modules
+# Configure logging before importing other modules (уровень — env LOG_LEVEL)
+import os
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 

@@ -1,0 +1,4 @@
+# Зависимости для прогона тестов (pytest tests/ -v).
+# Сервис должен быть запущен: docker compose up -d (+ дождаться model_loaded).
+pytest
+requests

@@ -6,8 +6,8 @@
 import os
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging (уровень — через env LOG_LEVEL)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -82,6 +82,23 @@ HOST = os.getenv("HOST", "0.0.0.0")
 
 # Port to bind the server
 PORT = int(os.getenv("PORT", "9007"))
+
+# Максимальный размер загружаемого аудиофайла, МБ (защита от OOM,
+# когда образ работает без реверс-прокси). 0 = без лимита.
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "200"))
+
+# Максимум одновременно обрабатываемых/ожидающих транскрипций.
+# При переполнении — 429 Too Many Requests. 0 = без лимита.
+MAX_PENDING_REQUESTS = int(os.getenv("MAX_PENDING_REQUESTS", "8"))
+
+# CORS: список origin'ов через запятую ('*' = все). Пусто = CORS выключен.
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+
+# Swagger UI (/docs, /redoc, /openapi.json). false = скрыть.
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "true").lower() == "true"
+
+# Уровень логирования (DEBUG/INFO/WARNING/ERROR)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # =============================================================================
 # Adaptive Timeout Configuration

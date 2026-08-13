@@ -10,8 +10,11 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+import asyncio
+
 from src.asr.registry import resolve_model
 from src.auth import verify_token
+from src.services.limits import read_upload_limited, request_slot
 
 from src.config import (
     ENGINE,
@@ -94,46 +97,50 @@ async def transcribe(
     selected_model = resolve_model(model)
 
     try:
-        # Read audio file
-        audio_content = await audio_file.read()
+        # Read audio file (с лимитом размера — см. MAX_UPLOAD_MB)
+        audio_content = await read_upload_limited(audio_file)
         logger.info(
             f"Received audio file: {audio_file.filename}, "
             f"size: {len(audio_content)} bytes"
         )
 
-        # Convert audio to numpy array
-        audio_data = load_audio_from_file(audio_content)
-        del audio_content
-        audio_duration_sec = len(audio_data) / SAMPLE_RATE
-        logger.info(
-            f"Audio converted: {len(audio_data)} samples at {SAMPLE_RATE}Hz, "
-            f"duration: {audio_duration_sec:.2f}s"
-        )
-
-        # Use default language if not specified
-        effective_language = language if language else DEFAULT_LANGUAGE
-
-        # Run transcription with adaptive timeout
-        try:
-            result, elapsed_time = transcribe_with_timeout(
-                asr_model=selected_model,
-                audio=audio_data,
-                audio_duration_sec=audio_duration_sec,
-                task=task,
-                language=effective_language,
-                word_timestamps=word_timestamps,
-                output=output,
+        # Слот очереди (429 при переполнении); тяжёлая работа — в thread
+        # pool, чтобы event loop оставался живым (см. openai.py).
+        with request_slot():
+            # Convert audio to numpy array
+            audio_data = await asyncio.to_thread(load_audio_from_file, audio_content)
+            del audio_content
+            audio_duration_sec = len(audio_data) / SAMPLE_RATE
+            logger.info(
+                f"Audio converted: {len(audio_data)} samples at {SAMPLE_RATE}Hz, "
+                f"duration: {audio_duration_sec:.2f}s"
             )
-        except TranscriptionTimeoutError as e:
-            logger.error(f"Transcription timeout: {e}")
-            raise HTTPException(
-                status_code=408,
-                detail=(
-                    f"Transcription timed out after {e.elapsed:.1f}s "
-                    f"(expected {e.expected:.1f}s). "
-                    f"This may indicate audio issues or model hallucination."
-                ),
-            )
+
+            # Use default language if not specified
+            effective_language = language if language else DEFAULT_LANGUAGE
+
+            # Run transcription with adaptive timeout
+            try:
+                result, elapsed_time = await asyncio.to_thread(
+                    transcribe_with_timeout,
+                    asr_model=selected_model,
+                    audio=audio_data,
+                    audio_duration_sec=audio_duration_sec,
+                    task=task,
+                    language=effective_language,
+                    word_timestamps=word_timestamps,
+                    output=output,
+                )
+            except TranscriptionTimeoutError as e:
+                logger.error(f"Transcription timeout: {e}")
+                raise HTTPException(
+                    status_code=408,
+                    detail=(
+                        f"Transcription timed out after {e.elapsed:.1f}s "
+                        f"(expected {e.expected:.1f}s). "
+                        f"This may indicate audio issues or model hallucination."
+                    ),
+                )
 
         # Calculate speed ratio (how many times faster than realtime)
         speed_ratio = audio_duration_sec / elapsed_time if elapsed_time > 0 else 0
