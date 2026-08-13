@@ -11,9 +11,8 @@ uvicorn
 pydantic
 python-multipart
 
-# Audio
+# Audio (декодирование: libsndfile + ffmpeg-фолбэк; ресемплинг: scipy)
 soundfile
-librosa
 scipy
 
 # GigaAM native

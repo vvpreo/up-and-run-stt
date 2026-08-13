@@ -19,15 +19,22 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/data \
     TORCH_HOME=/app/data/torch
 
-# Install system dependencies.
-# ffmpeg — фолбэк-декодер для форматов, которые не умеет libsndfile
-# (m4a/aac, webm, wma и т.п.); см. src/utils/audio.py.
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libgomp1 \
-    ffmpeg \
-    git \
     && rm -rf /var/lib/apt/lists/*
+
+# Static ffmpeg binary — фолбэк-декодер для форматов, которые не умеет
+# libsndfile (m4a/aac, webm, wma и т.п.); см. src/utils/audio.py.
+# Один self-contained файл (~80 МБ) вместо apt-пакета с деревом библиотек
+# на ~550 МБ. Скачивается через stdlib Python — curl/wget в образе не нужны.
+RUN python -c "import urllib.request; urllib.request.urlretrieve('https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz', '/tmp/ffmpeg.tar.xz')" \
+    && python -c "import tarfile; tarfile.open('/tmp/ffmpeg.tar.xz').extractall('/tmp/ffmpeg')" \
+    && cp /tmp/ffmpeg/*/ffmpeg /usr/local/bin/ffmpeg \
+    && chmod +x /usr/local/bin/ffmpeg \
+    && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz \
+    && ffmpeg -version | head -1
 
 # Set working directory
 WORKDIR /app
@@ -41,11 +48,11 @@ RUN pip install --no-cache-dir \
 # Install ML/audio dependencies (cached layer)
 # transformers/onnx/onnxruntime намеренно НЕ ставятся: GigaAM native их не
 # импортирует в рабочих путях (проверено), это только лишний вес образа.
+# librosa тоже нет: ресемплинг делает scipy, декодирование — libsndfile/ffmpeg.
 RUN pip install --no-cache-dir \
     numpy==2.0.2 \
     scipy \
     soundfile \
-    librosa \
     sentencepiece
 
 # Install web/framework dependencies (cached layer)

@@ -12,7 +12,8 @@ from typing import Tuple
 
 import numpy as np
 import soundfile as sf
-import librosa
+from math import gcd
+from scipy.signal import resample_poly
 
 from src.config import SAMPLE_RATE
 
@@ -62,15 +63,14 @@ def load_audio_from_file(audio_content: bytes) -> np.ndarray:
         del stereo
         logger.debug("Converted stereo to mono")
 
-    # Resample to 16kHz if needed (Whisper requirement)
+    # Resample to 16kHz if needed (Whisper requirement).
+    # Polyphase-ресемплинг scipy — та же математика, что librosa
+    # (res_type='polyphase'), но без 250 МБ зависимостей numba/llvmlite.
     if sample_rate != SAMPLE_RATE:
         logger.debug(f"Resampling from {sample_rate}Hz to {SAMPLE_RATE}Hz")
         original = audio_data
-        audio_data = librosa.resample(
-            original,
-            orig_sr=sample_rate,
-            target_sr=SAMPLE_RATE,
-        )
+        g = gcd(int(sample_rate), SAMPLE_RATE)
+        audio_data = resample_poly(original, SAMPLE_RATE // g, int(sample_rate) // g)
         del original
 
     # Ensure float32 (avoid copy if already float32)
