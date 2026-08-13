@@ -15,4 +15,8 @@ bench_results
 .venv/
 benchmark/dataset/
 benchmark/results/
-.claude.hf_token
+.claude/settings.local.json
+
+# secrets — never commit
+.hf_token
+*.token
