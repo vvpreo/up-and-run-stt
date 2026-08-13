@@ -67,6 +67,8 @@ curl -s http://localhost:9007/health | python3 -m json.tool
 | `POST` | `/v1/audio/transcriptions` | OpenAI-совместимый (поле `file`). Для VoiceInk и OpenAI SDK. |
 | `POST` | `/gigaam/asr` | Нативный (поле `audio_file`), расширенный ответ: сегменты, слова, метрики. |
 | `POST` | `/gigaam/emotion` | Эмоции речи (GigaAMEmo): angry / sad / neutral / positive. |
+| `GET` | `/v1/models`, `/v1/models/{id}` | Список моделей инстанса (OpenAI-формат, для GUI-клиентов). |
+| `POST` | `/v1/audio/translations` | Не поддерживается (модель русскоязычная) — корректный 400. |
 | `GET`  | `/health` | Статус, модели, очередь, флаги фич, память. |
 | `GET`  | `/` | WebUI-консоль: вход по `AUTH_TOKEN`, микрофон/файл, оба контракта, все форматы, слова, эмоции ([src/static/index.html](src/static/index.html)). |
 

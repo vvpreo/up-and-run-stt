@@ -349,7 +349,6 @@ class GigaAMOnnxASR(ASRModel):
 
             texts: List[str] = []
             segments: List[Segment] = []
-            has_words = False
             for idx, (start, end) in enumerate(bounds):
                 offset = start / SAMPLE_RATE
                 text, token_ids, token_frames, frame_shift = self._infer_chunk(
@@ -368,7 +367,6 @@ class GigaAMOnnxASR(ASRModel):
                     seg.words = _group_words(
                         self.tokenizer, token_ids, token_frames, frame_shift, offset
                     )
-                    has_words = has_words or bool(seg.words)
                 segments.append(seg)
 
         full_text = " ".join(texts).strip()
@@ -376,9 +374,9 @@ class GigaAMOnnxASR(ASRModel):
             return full_text
 
         resp = TranscriptionResponse(text=full_text, language=language or "ru")
-        # Сегменты отдаём для длинного аудио (как torch-движок) и всегда,
-        # когда запрошены слова — слова живут внутри сегментов.
-        if len(segments) > 1 or has_words:
+        # Сегменты прикладываем всегда (даже один): из них собираются
+        # srt/vtt/tsv и verbose_json — без сегментов субтитры пустые.
+        if segments:
             resp.segments = segments
         if duration > 0:
             resp.chars_per_second = round(len(full_text) / duration, 4)

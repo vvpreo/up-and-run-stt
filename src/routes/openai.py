@@ -69,6 +69,13 @@ async def openai_transcribe(
     response_format: str = Form("json", description="Response format: json, text, srt, vtt, verbose_json"),
     temperature: float = Form(0.0, description="Temperature (not used)"),
     timestamp_granularities: Optional[list[str]] = Form(None, description="Timestamp granularities: word, segment"),
+    # Официальные SDK шлют multipart-поле с квадратными скобками
+    timestamp_granularities_bracket: Optional[list[str]] = Form(
+        None, alias="timestamp_granularities[]", include_in_schema=False
+    ),
+    # Принимаем-и-игнорируем: не 422 на параметры новых OpenAI-моделей
+    stream: Optional[bool] = Form(None, description="SSE streaming (not supported, ignored)"),
+    chunking_strategy: Optional[str] = Form(None, include_in_schema=False),
 ):
     """
     OpenAI-совместимый эндпоинт транскрипции.
@@ -116,6 +123,11 @@ async def openai_transcribe(
           -F "timestamp_granularities[]=segment"
         ```
     """
+    # Объединяем оба wire-имени поля таймстемпов (с [] и без)
+    timestamp_granularities = timestamp_granularities or timestamp_granularities_bracket
+    if stream:
+        logger.warning("stream=true requested but SSE streaming is not supported; returning full response")
+
     # Выбор модели по полю `model` запроса (реестр моделей инстанса);
     # 'whisper-1' и незнакомые имена -> модель по умолчанию.
     selected_model = resolve_model(model)
@@ -146,8 +158,9 @@ async def openai_transcribe(
                 f"duration: {audio_duration_sec:.2f}s"
             )
 
-            # Use internal output format based on what we need
-            internal_output = "json" if want_words or response_format == "verbose_json" else "text"
+            # Внутренний формат: srt/vtt/verbose_json собираются из сегментов,
+            # поэтому просим у движка json; голый text — только для text.
+            internal_output = "text" if response_format == "text" else "json"
 
             # Use default language if not specified
             effective_language = language if language else DEFAULT_LANGUAGE
@@ -328,6 +341,7 @@ def _format_openai_response(
             language=result.language or language,
             duration=audio_duration_sec,
             chars_per_second=result.chars_per_second,
+            usage={"type": "duration", "seconds": round(audio_duration_sec, 2)},
         )
 
         # Add words and segments if available

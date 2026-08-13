@@ -26,6 +26,7 @@ from src.config import (
     ENABLE_DOCS,
 )
 from src.routes import asr_router, emotion_router, health_router, openai_router
+from src.routes.openai_compat import router as openai_compat_router
 from src.routes.asr import set_asr_model as set_asr_model_asr
 from src.routes.health import set_asr_model as set_asr_model_health
 from src.routes.openai import set_asr_model as set_asr_model_openai
@@ -150,6 +151,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(asr_router)
     app.include_router(openai_router)
+    app.include_router(openai_compat_router)
     app.include_router(emotion_router)
 
     # Проверка токена для WebUI (страница показывает интерфейс только
@@ -161,6 +163,8 @@ def create_app() -> FastAPI:
     async def auth_check(_token: str = Depends(verify_token)) -> dict:
         return {"ok": True}
 
+    _install_openai_error_format(app)
+
     # Тестовая веб-страница (запись с микрофона / загрузка файла).
     # Сама страница открыта; транскрипция с неё требует Bearer-токен,
     # если задан AUTH_TOKEN.
@@ -171,6 +175,55 @@ def create_app() -> FastAPI:
         return FileResponse(index_html, media_type="text/html")
 
     return app
+
+
+def _install_openai_error_format(app: FastAPI) -> None:
+    """
+    Ошибки на путях /v1/* отдаются в формате OpenAI:
+        {"error": {"message", "type", "param", "code"}}
+    (SDK и GUI-клиенты парсят именно его), причём ошибки валидации — 400,
+    как у OpenAI, а не FastAPI-шные 422. Остальные пути сохраняют
+    стандартный формат FastAPI ({"detail": ...}).
+    """
+    from fastapi import Request
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.exception_handlers import (
+        http_exception_handler,
+        request_validation_exception_handler,
+    )
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    def _envelope(status: int, message: str, param=None, code=None) -> JSONResponse:
+        if status == 401:
+            err_type, code = "invalid_request_error", code or "invalid_api_key"
+        elif status == 429:
+            err_type = "rate_limit_error"
+        elif status >= 500:
+            err_type = "server_error"
+        else:
+            err_type = "invalid_request_error"
+        return JSONResponse(
+            status_code=status,
+            content={"error": {"message": message, "type": err_type, "param": param, "code": code}},
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exc(request: Request, exc: StarletteHTTPException):
+        if not request.url.path.startswith("/v1"):
+            return await http_exception_handler(request, exc)
+        code = None
+        if exc.status_code == 404 and request.url.path.startswith("/v1/models"):
+            code = "model_not_found"
+        return _envelope(exc.status_code, str(exc.detail), code=code)
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_exc(request: Request, exc: RequestValidationError):
+        if not request.url.path.startswith("/v1"):
+            return await request_validation_exception_handler(request, exc)
+        first = exc.errors()[0] if exc.errors() else {}
+        param = ".".join(str(p) for p in first.get("loc", []) if p not in ("body",)) or None
+        return _envelope(400, first.get("msg", "Invalid request"), param=param)
 
 
 # Create the app instance

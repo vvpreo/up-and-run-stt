@@ -159,7 +159,8 @@ def test_known_but_disabled_model_is_400(base_url, auth_headers, short_wav):
             timeout=TIMEOUT,
         )
     assert r.status_code == 400
-    assert "not enabled" in r.json()["detail"]
+    # /v1/* отдаёт ошибки в формате OpenAI: {"error": {message, type, ...}}
+    assert "not enabled" in r.json()["error"]["message"]
 
 
 # ---------------------------------------------------------------------------

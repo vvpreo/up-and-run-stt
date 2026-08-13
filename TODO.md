@@ -1,10 +1,17 @@
 # TODO
 
-- [ ] [Переезд на ONNX Runtime: engine, эмоции, Dockerfile без torch, хостинг весов](docs/plans/public-image-roadmap.md) — совместимость таймстемпов и эмоций подтверждена экспериментально, фичерайзер готов
+- [ ] SSE-стриминг транскрипции: `stream=true` на `/v1/audio/transcriptions` (события `transcript.text.delta` / `transcript.text.done`, как у OpenAI; псевдо-стриминг по готовым сегментам достаточен)
+- [ ] VAD-чанкование длинного аудио: silero-vad (ONNX, ~2 МБ) для умных границ вместо фиксированных 30-с чанков — меньше разрезанных слов на стыках
+- [ ] Публикация на Docker Hub: GitHub-репо (вычистить инфраструктурные детали) → CI на GitHub Actions (PR: build + pytest + smoke `/health`; тег `v*`: multi-arch push на Hub + GHCR, trivy-скан, README-sync) → ARM64 (заменить amd64-URL статического ffmpeg на выбор по `TARGETARCH`, OCI-лейблы, пин версий зависимостей) → англоязычный README для Hub
+- [ ] Метрики Prometheus: `/metrics` (счётчики запросов по эндпоинту/модели/статусу, гистограммы времени и RTF, секунды обработанного аудио, глубина очереди)
+- [ ] Опционально: вариант образа с запечёнными весами (`-offline`, +~850 МБ) для air-gapped и независимости от HF
+- [ ] Мелочь OpenAI-полноты: `language` в verbose_json полным английским словом («russian»), как у whisper-1
 
 # PLANNED
 
 # TO REVIEW
+
+- [X] Переезд на ONNX Runtime — завершён: движок (CTC+RNNT, слова, чанки, паритет с torch бит-в-бит), веса всех вариантов + emo на huggingface.co/vvpreo/gigaam-v3-onnx (конвертация `scripts/convert_onnx.py`), образ 733 МБ без torch (`Dockerfile.torch` — для конвертации), эмоции `/gigaam/emotion`, WebUI-консоль с токен-гейтом и всеми фичами, OpenAI-совместимость (`/v1/models`, формат ошибок, отказ translations, терпимость к параметрам SDK, `usage`), 32 интеграционных теста
 
 - [X] Ужать образ: 2.82 → 1.81 ГБ (−36%)
   - apt-пакет ffmpeg (с деревом библиотек ~550 МБ) заменён на статический бинарь johnvansickle (~80 МБ), скачивается при сборке stdlib-питоном.

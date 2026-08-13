@@ -84,3 +84,6 @@ class OpenAITranscriptionResponse(BaseModel):
 
     words: Optional[list[OpenAIWord]] = None
     segments: Optional[list[OpenAISegment]] = None
+
+    # OpenAI usage object (whisper-style): {"type": "duration", "seconds": n}
+    usage: Optional[dict] = None
