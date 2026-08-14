@@ -1,6 +1,6 @@
 # TODO
 
-- [ ] Публикация на Docker Hub: GitHub-репо (вычистить инфраструктурные детали) → CI на GitHub Actions (PR: build + pytest + smoke `/health`; тег `v*`: multi-arch push на Hub + GHCR, trivy-скан, README-sync) → ARM64 (заменить amd64-URL статического ffmpeg на выбор по `TARGETARCH`, OCI-лейблы, пин версий зависимостей) → англоязычный README для Hub
+- [ ] Публикация на Docker Hub: осталось создать Access Token на Хабе и положить секреты `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` в репозиторий, затем запустить Actions → Release. Опционально: зеркало в GHCR, trivy-скан
 - [ ] Метрики Prometheus: `/metrics` (счётчики запросов по эндпоинту/модели/статусу, гистограммы времени и RTF, секунды обработанного аудио, глубина очереди)
 - [ ] Опционально: вариант образа с запечёнными весами (`-offline`, +~850 МБ) для air-gapped и независимости от HF
 - [ ] Мелочь OpenAI-полноты: `language` в verbose_json полным английским словом («russian»), как у whisper-1
@@ -11,6 +11,15 @@
 - [ ] [SSE-стриминг + VAD-чанкование](docs/plans/streaming-and-vad.md) — план с оценками производительности и ресурсов; порядок: VAD → стриминг → фразовые cue
 
 # TO REVIEW
+
+- [X] Фундамент для публикации образа + CI/CD на GitHub Actions
+  - Зависимости переведены на **uv**: `pyproject.toml` + `uv.lock` (39 пакетов, точная резолюция включая транзитивные). Лок универсальный — `[tool.uv] environments` покрывает linux x86_64 и aarch64, поэтому обе архитектуры ставят идентичные версии. Сборка идёт через `uv sync --frozen` (падает, если лок разошёлся с pyproject). `requirements.txt`/`requirements-dev.txt` удалены — первый был мёртвый (ссылался на несуществующий `Dockerfile.cpu`, тянул torch, не упоминал onnxruntime).
+  - Multi-arch: статический ffmpeg выбирается по `ARG TARGETARCH` вместо прибитого amd64-URL.
+  - OCI-лейблы (source, revision, version, licenses и пр.) — на Docker Hub будет ссылка на исходники и видно, из какого коммита собран образ.
+  - Dockerfile стал многостадийным: uv ставит зависимости в builder, в финальный образ едет только готовый venv. Размер 742 → **656 МБ**. По дороге поймал регресс до 1 ГБ — `chown -R` поверх скопированного venv дублировал 250 МБ в отдельный слой; чинится созданием пользователя ДО копирования и `COPY --chown`.
+  - `.github/workflows/ci.yml` — на каждый push/PR: сборка и **47 интеграционных тестов на обеих архитектурах** (нативные раннеры `ubuntu-latest` и `ubuntu-24.04-arm`, бесплатные для публичных репо). Веса моделей кэшируются через `actions/cache`.
+  - `.github/workflows/release.yml` — ручной запуск с выбором patch/minor/major: поднимает версию в `pyproject.toml` и `src/__init__.py`, коммитит, ставит тег `vX.Y.Z`, собирает обе архитектуры нативно, сшивает multi-arch манифест, публикует теги `X.Y.Z` / `X.Y` / `X` / `latest`, синкает README на Хаб и создаёт GitHub Release. Есть режим `dry_run` — сборка без публикации.
+  - ⚠️ Воркфлоу ещё ни разу не запускались: нужен первый прогон. Доступность раннера `ubuntu-24.04-arm` подтверждается только на живом запуске.
 
 - [X] Переименование `gigaam-stt` → `up-and-run-stt` + обезличивание проекта
   - Имя продукта: 63 замены в 23 файлах (README, TODO, Dockerfile ×2, docker-compose, build.sh, main.py, src/app.py, WebUI, скрипты, тесты). Образ, compose-сервис и контейнер теперь `up-and-run-stt`.

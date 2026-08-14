@@ -1,0 +1,220 @@
+# Релиз в Docker Hub. Запускается вручную (Actions -> Release -> Run workflow):
+# выбираешь, какую часть версии поднять, всё остальное делает пайплайн —
+# правит версию в файлах, ставит git-тег, собирает обе архитектуры и
+# публикует. Ручной запуск, а не «на каждый пуш», выбран сознательно:
+# релиз — это решение, а не побочный эффект коммита. Свежий образ с main
+# и так доступен всегда: CI не публикует, но edge-тег ставит job publish-edge.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Какую часть версии поднять"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+        required: true
+      dry_run:
+        description: "Собрать и проверить, но не публиковать"
+        type: boolean
+        default: false
+
+env:
+  IMAGE: ${{ vars.DOCKERHUB_IMAGE || 'vvpreo/up-and-run-stt' }}
+
+jobs:
+  # ---------------------------------------------------------------- версия
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      created: ${{ steps.bump.outputs.created }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bump version in pyproject.toml and src/__init__.py
+        id: bump
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+
+          bump = os.environ["BUMP"]
+          pp = pathlib.Path("pyproject.toml")
+          init = pathlib.Path("src/__init__.py")
+
+          cur = re.search(r'^version = "([^"]+)"', pp.read_text(), re.M).group(1)
+          major, minor, patch = (int(x) for x in cur.split("."))
+          if bump == "major":   major, minor, patch = major + 1, 0, 0
+          elif bump == "minor": minor, patch = minor + 1, 0
+          else:                 patch += 1
+          new = f"{major}.{minor}.{patch}"
+
+          # Две точки правды для версии — pyproject (сборка) и src/__init__
+          # (то, что сервис отдаёт в /health). Поднимаем обе разом, чтобы
+          # они не разъезжались.
+          pp.write_text(re.sub(r'^version = "[^"]+"', f'version = "{new}"',
+                               pp.read_text(), count=1, flags=re.M))
+          init.write_text(re.sub(r'^__version__ = "[^"]+"', f'__version__ = "{new}"',
+                                 init.read_text(), count=1, flags=re.M))
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"version={new}\n")
+          print(f"{cur} -> {new}")
+          PY
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+        env:
+          BUMP: ${{ inputs.bump }}
+
+      - name: Commit and tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Release v${{ steps.bump.outputs.version }}"
+          git tag -a "v${{ steps.bump.outputs.version }}" \
+                  -m "Release v${{ steps.bump.outputs.version }}"
+          git push origin HEAD:${{ github.ref_name }} --follow-tags
+
+  # ---------------------------------------------------------------- сборка
+  # Каждая архитектура собирается на своём нативном раннере и пушится
+  # БЕЗ тега, по дайджесту; в один multi-arch тег их сшивает job merge.
+  build:
+    needs: version
+    if: ${{ !inputs.dry_run }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            REVISION=${{ github.sha }}
+            CREATED=${{ needs.version.outputs.created }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Save digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  # ------------------------------------------------- сшивка и публикация
+  merge:
+    needs: [version, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # X.Y.Z — точная версия; X.Y и X — «последняя в линейке», чтобы можно
+      # было закрепиться на минорной ветке; latest — последний стабильный.
+      - name: Create multi-arch manifest
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          MAJOR="${V%%.*}"; MINOR="${V%.*}"
+          SRCS=""
+          for f in /tmp/digests/*; do
+            SRCS="$SRCS ${{ env.IMAGE }}@$(cat "$f")"
+          done
+          docker buildx imagetools create \
+            -t "${{ env.IMAGE }}:$V" \
+            -t "${{ env.IMAGE }}:$MINOR" \
+            -t "${{ env.IMAGE }}:$MAJOR" \
+            -t "${{ env.IMAGE }}:latest" \
+            $SRCS
+          docker buildx imagetools inspect "${{ env.IMAGE }}:$V"
+
+      # README на Docker Hub — та же страница, что и в репозитории
+      - name: Sync Docker Hub description
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          short-description: "Local Russian speech-to-text (GigaAM, ONNX, CPU) with an OpenAI-compatible API"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ needs.version.outputs.version }}"
+          gh release create "v$V" \
+            --title "v$V" \
+            --generate-notes \
+            --notes-start-tag "$(git describe --tags --abbrev=0 "v$V^" 2>/dev/null || echo '')" \
+            || gh release create "v$V" --title "v$V" --generate-notes
+
+  # ------------------------------------------------------------ edge-образ
+  # Не относится к релизу: отдельный воркфлоу держал бы дубль сборки, а так
+  # ручной запуск с dry_run=true даёт проверку сборки без публикации.
+  dry-run-build:
+    needs: version
+    if: ${{ inputs.dry_run }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build only
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          push: false
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.arch }}

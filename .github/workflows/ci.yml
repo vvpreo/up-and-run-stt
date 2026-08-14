@@ -1,0 +1,96 @@
+# Проверка каждого пуша и PR: образ должен собраться и пройти интеграционные
+# тесты на ОБЕИХ целевых архитектурах. arm64 гоняется на нативном раннере
+# (ubuntu-24.04-arm бесплатен для публичных репозиториев) — это на порядок
+# быстрее сборки под QEMU и заодно честно проверяет, что образ там работает.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Новый пуш в ту же ветку отменяет предыдущий незавершённый прогон
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Веса моделей (~845 МБ) качаются с HF при первом старте. Без кэша
+      # это происходило бы на каждом прогоне; ключ включает архитектуру,
+      # потому что кэш восстанавливается в примонтированный каталог.
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: .ci-models
+          key: models-${{ matrix.arch }}-v3_e2e_ctc-v1
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: up-and-run-stt:ci
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+      - name: Start service
+        env:
+          AUTH_TOKEN: ci-test-token
+        run: |
+          # Контейнер работает от uid 1000, каталог создаёт runner — открываем
+          # права, иначе сервису некуда сложить скачанные веса.
+          mkdir -p .ci-models && chmod 777 .ci-models
+          docker run -d --name stt -p 9007:9007 \
+            -v "$PWD/.ci-models:/app/data" \
+            -e AUTH_TOKEN="$AUTH_TOKEN" \
+            up-and-run-stt:ci
+
+      - name: Wait for model_loaded
+        run: |
+          # Первый прогон (пустой кэш) качает веса — отсюда щедрый таймаут.
+          for i in $(seq 1 120); do
+            if curl -sf http://localhost:9007/health | grep -q '"model_loaded": *true'; then
+              echo "ready after ${i}0s"; exit 0
+            fi
+            sleep 10
+          done
+          echo "service did not become ready" >&2
+          docker logs stt >&2
+          exit 1
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run integration tests
+        env:
+          STT_BASE_URL: http://localhost:9007
+          STT_AUTH_TOKEN: ci-test-token
+        run: uv run --group dev pytest tests/ -v
+
+      - name: Service logs on failure
+        if: failure()
+        run: docker logs stt
