@@ -1,0 +1,55 @@
+[project]
+name = "up-and-run-stt"
+version = "2.0.0"
+description = "Local Russian speech-to-text service (GigaAM, ONNX Runtime, CPU-only) with an OpenAI-compatible API"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+
+# Runtime-зависимости основного образа (ONNX Runtime, без PyTorch).
+# Здесь — только нижние границы; точная резолюция живёт в uv.lock, который
+# универсален: одна резолюция покрывает и linux/amd64, и linux/arm64,
+# поэтому multi-arch сборка ставит идентичный набор версий на обеих.
+#
+# Обновление версий: `uv lock --upgrade` -> пересборка -> pytest tests/.
+# PyTorch-вариант (Dockerfile.torch) сюда не входит — он инструментальный,
+# нужен только для конвертации весов в ONNX и сверки качества.
+dependencies = [
+    # Инференс
+    "onnxruntime>=1.28.0",
+    # Численные операции и ресемплинг (scipy.signal.resample_poly)
+    "numpy>=2.4.6",
+    "scipy>=1.17.1",
+    # Декодирование аудио: быстрый путь libsndfile (фолбэк на ffmpeg — в образе)
+    "soundfile>=0.14.0",
+    # Токенизаторы e2e-моделей и чтение их конфигов
+    "sentencepiece>=0.2.2",
+    "omegaconf>=2.3.1",
+    # HTTP-сервис
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.3",
+    "pydantic>=2.13.4",
+    "python-multipart>=0.0.32",
+    # Мониторинг памяти в /health
+    "psutil>=7.2.2",
+]
+
+[dependency-groups]
+# Прогон интеграционных тестов: `uv sync --group dev`, затем `uv run pytest tests/`.
+# Тесты ходят в уже запущенный сервис (см. tests/conftest.py).
+dev = [
+    "pytest>=8.0",
+    "requests>=2.32",
+]
+
+[tool.uv]
+# Сервис запускается как `python main.py`, пакетом не устанавливается —
+# uv нужен только для управления зависимостями, собирать проект не надо.
+package = false
+
+# Универсальная резолюция под обе целевые платформы образа: лок содержит
+# версии для amd64 и arm64 сразу, без пересчёта на каждой архитектуре.
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]

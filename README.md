@@ -33,6 +33,14 @@ docker run -d --name up-and-run-stt -p 9007:9007 \
   up-and-run-stt:cpu
 ```
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/): `pyproject.toml`
+declares them and `uv.lock` pins the exact resolution, including transitive
+packages. The lock is universal — one resolution covers both `linux/amd64` and
+`linux/arm64`, so both architectures of the published image install identical
+versions. The Docker build runs `uv sync --frozen`, which fails rather than
+silently re-resolving if the lock has drifted from `pyproject.toml`. To upgrade:
+`uv lock --upgrade`, rebuild, run the tests.
+
 Defaults for every variable are baked into the image (`ENV` in the `Dockerfile`),
 so a port mapping and a volume for the weights are enough to start. The image is
 **~0.7 GB** (inference on ONNX Runtime, no PyTorch); model weights are not part of
@@ -365,8 +373,8 @@ The integration tests talk to a running service (`docker compose up -d`, then wa
 for `model_loaded: true`):
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pytest tests/ -v
+uv sync --group dev
+uv run pytest tests/ -v
 ```
 
 Coverage: /health, authorization, both endpoints, the model registry, every input
