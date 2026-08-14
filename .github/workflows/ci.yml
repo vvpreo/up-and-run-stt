@@ -85,6 +85,13 @@ jobs:
         with:
           enable-cache: true
 
+      # Тестам нужен ffmpeg НА РАННЕРЕ (не в образе): они нарезают из сэмпла
+      # короткие клипы и перекодируют его в 8 форматов, чтобы проверить
+      # декодирование. В образах GitHub Actions ffmpeg не предустановлен —
+      # ни на amd64, ни на arm64.
+      - name: Install ffmpeg (test fixtures)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run integration tests
         env:
           STT_BASE_URL: http://localhost:9007
