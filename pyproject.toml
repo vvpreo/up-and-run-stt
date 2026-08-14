@@ -1,6 +1,6 @@
 [project]
 name = "up-and-run-stt"
-version = "2.0.0"
+version = "2.0.1"
 description = "Local Russian speech-to-text service (GigaAM, ONNX Runtime, CPU-only) with an OpenAI-compatible API"
 readme = "README.md"
 requires-python = ">=3.11"
