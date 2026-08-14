@@ -30,14 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Static ffmpeg binary — фолбэк-декодер для форматов, которые не умеет
 # libsndfile (m4a/aac, webm, wma и т.п.); см. src/utils/audio.py.
-# Один self-contained файл (~80 МБ) вместо apt-пакета с деревом библиотек
-# на ~550 МБ. Скачивается через stdlib Python — curl/wget в образе не нужны.
-RUN python -c "import urllib.request; urllib.request.urlretrieve('https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz', '/tmp/ffmpeg.tar.xz')" \
-    && python -c "import tarfile; tarfile.open('/tmp/ffmpeg.tar.xz').extractall('/tmp/ffmpeg')" \
-    && cp /tmp/ffmpeg/*/ffmpeg /usr/local/bin/ffmpeg \
-    && chmod +x /usr/local/bin/ffmpeg \
-    && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz \
-    && ffmpeg -version | head -1
+# Берётся из готового multi-arch образа: johnvansickle.com отдаёт
+# датацентровым IP заглушку вместо архива (ломало сборку в CI).
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+RUN ffmpeg -version | head -1
 
 # Set working directory
 WORKDIR /app

@@ -64,18 +64,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Static ffmpeg binary — фолбэк-декодер для m4a/webm/wma и пр. (см. src/utils/audio.py).
 # Один self-contained файл вместо apt-пакета с ~550 МБ библиотек.
-# TARGETARCH подставляет buildx (amd64 / arm64) — имена сборок johnvansickle
-# совпадают с этими значениями один-в-один. Дефолт нужен для обычного
-# `docker build` без buildx, где переменная может быть пустой.
-ARG TARGETARCH=amd64
-RUN set -eux; \
-    url="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${TARGETARCH}-static.tar.xz"; \
-    python -c "import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], '/tmp/ffmpeg.tar.xz')" "$url" \
-    && python -c "import tarfile; tarfile.open('/tmp/ffmpeg.tar.xz').extractall('/tmp/ffmpeg')" \
-    && cp /tmp/ffmpeg/*/ffmpeg /usr/local/bin/ffmpeg \
-    && chmod +x /usr/local/bin/ffmpeg \
-    && rm -rf /tmp/ffmpeg /tmp/ffmpeg.tar.xz \
-    && ffmpeg -version | head -1
+#
+# Берётся из готового multi-arch образа, а НЕ качается с johnvansickle.com:
+# тот сайт отдаёт датацентровым IP HTML-заглушку с кодом 200 вместо архива,
+# из-за чего сборка в GitHub Actions падала на распаковке. Здесь фетча по
+# HTTP нет вовсе — buildx сам подтягивает слой нужной архитектуры, и версия
+# зафиксирована тегом образа.
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+RUN ffmpeg -version | head -1
 
 # Непривилегированный пользователь (uid 1000) создаётся ДО копирования venv.
 # Это принципиально для размера: `chown -R` поверх уже скопированного venv
