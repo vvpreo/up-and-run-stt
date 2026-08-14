@@ -25,7 +25,7 @@ def _model_object(name: str) -> dict:
         "id": name,
         "object": "model",
         "created": _CREATED,
-        "owned_by": "gigaam-stt",
+        "owned_by": "up-and-run-stt",
     }
 
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gigaam-stt</title>
+<title>up-and-run-stt</title>
 <link rel="icon" href="data:,">
 <style>
   :root {
@@ -123,7 +123,7 @@
 <!-- ======================= экран входа ======================= -->
 <div id="gate" hidden>
   <div class="card">
-    <h2>gigaam-stt</h2>
+    <h2>up-and-run-stt</h2>
     <p>Введите ключ API (<code>AUTH_TOKEN</code>), чтобы открыть консоль сервиса.</p>
     <input type="password" id="gateToken" placeholder="Bearer-токен" autocomplete="off">
     <button class="primary" id="gateBtn">Войти</button>
@@ -133,7 +133,7 @@
 
 <!-- ======================= приложение ======================= -->
 <div class="wrap" id="app" hidden>
-  <h1>gigaam-stt — консоль сервиса
+  <h1>up-and-run-stt — консоль сервиса
     <span class="chip"><span class="dot" id="healthDot"></span><span id="healthText">проверяю…</span></span>
     <span id="docsLinks" hidden>
       <a class="chip" href="/docs" target="_blank" title="Swagger UI">📘 API-документация</a>
@@ -148,7 +148,7 @@
       <label class="opt">Контракт API
         <select id="endpoint">
           <option value="openai" selected>OpenAI · /v1/audio/transcriptions</option>
-          <option value="native">Нативный · /gigaam/asr</option>
+          <option value="native">Нативный · /stt/asr</option>
         </select>
       </label>
       <label class="opt">Модель
@@ -165,7 +165,7 @@
       <label class="toggle"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
       <label class="toggle" id="emoWrap" hidden><input type="checkbox" id="emoOn"> Эмоции</label>
       <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается"><input type="checkbox" id="vadOn"> VAD-чанкование</label>
-      <label class="toggle" id="streamWrap" title="SSE: текст приходит по мере распознавания чанков (события OpenAI transcript.text.delta)"><input type="checkbox" id="streamOn"> Стриминг</label>
+      <label class="toggle" id="streamWrap" title="Стриминг ОТВЕТА (SSE): аудио уходит одним запросом целиком, текст приходит дельтами по мере распознавания чанков на сервере (события OpenAI transcript.text.delta). Приём запроса не стримится."><input type="checkbox" id="streamOn"> Стриминг ответа</label>
     </div>
     <div class="hint" id="fmtHint"></div>
   </div>
@@ -199,7 +199,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'live-mic-2';
+const UI_BUILD = 'resp-stream-1';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -328,7 +328,7 @@ function updateHint() {
   if (ep === 'native' && wts && fmt !== 'json')
     hint = 'Слова в нативном контракте возвращаются только в формате json.';
   if (ep === 'openai' && $('streamOn').checked)
-    hint = 'Стриминг: текст приходит дельтами (формат/слова не применяются).';
+    hint = 'Стриминг ответа: аудио уходит целиком, текст приходит дельтами по мере распознавания чанков (формат/слова не применяются).';
   $('fmtHint').textContent = hint;
 }
 $('streamOn').addEventListener('change', updateHint);
@@ -338,11 +338,15 @@ let rec = null;
 if (!navigator.mediaDevices?.getUserMedia) { $('recBtn').disabled = true; $('micWarn').hidden = false; }
 $('recBtn').addEventListener('click', () => rec ? stopRecording() : startRecording());
 
+// Микрофон — обычный источник аудиофайла: пишем целиком, по «Стоп» отдаём
+// в тот же transcribe(), что и загруженный файл. Сервис умеет стримить
+// ОТВЕТ (SSE-дельты по мере распознавания чанков), но не приём запроса —
+// поэтому резать запись на фразы в браузере смысла нет.
 async function startRecording() {
   let stream;
   try {
-    // Без AGC/шумодава: авто-усиление поднимает тишину до уровня речи и
-    // ломает детекцию пауз (а нам нужен сырой сигнал для VAD)
+    // Сырой сигнал без AGC/шумодава: постобработка браузера добавляет
+    // артефакты, которых не было в обучающих данных модели
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { autoGainControl: false, noiseSuppression: false, echoCancellation: true },
     });
@@ -353,37 +357,10 @@ async function startRecording() {
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const chunks = [];
 
-  // Живая диктовка: при включённом «Стриминге» фразы отправляются на сервер
-  // ПРЯМО ВО ВРЕМЯ записи (детекция пауз по RMS на клиенте), текст появляется
-  // до нажатия «Стоп».
-  const live = $('streamOn').checked && !$('streamWrap').hidden;
-
-  rec = {
-    ctx, stream, node, src, chunks, sampleRate: ctx.sampleRate, startedAt: Date.now(),
-    live, phrase: [], silenceMs: 0, sawSpeech: false,
-    chain: Promise.resolve(), parts: [], card: null, textEl: null, logEl: null,
-  };
-
-  if (live) {
-    const empty = document.querySelector('#results .empty');
-    if (empty) empty.remove();
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `
-      <div class="status" id="live-mic"><span class="spin"></span>живая диктовка — говорите, текст появится по фразам…</div>
-      <div class="result-text" style="min-height:52px"></div>
-      <div class="stream-log"></div>
-      <div class="meta"></div>`;
-    $('results').prepend(card);
-    rec.card = card;
-    rec.textEl = card.querySelector('.result-text');
-    rec.logEl = card.querySelector('.stream-log');
-  }
+  rec = { ctx, stream, node, src, chunks, sampleRate: ctx.sampleRate, startedAt: Date.now() };
 
   node.onaudioprocess = ev => {
-    const frame = new Float32Array(ev.inputBuffer.getChannelData(0));
-    chunks.push(frame);
-    if (rec && rec.live) liveFeed(frame);
+    chunks.push(new Float32Array(ev.inputBuffer.getChannelData(0)));
   };
   // node должен быть подключён к графу, чтобы срабатывать, но слышать себя
   // в колонках не нужно — глушим нулевым gain'ом
@@ -396,80 +373,13 @@ async function startRecording() {
   }, 250);
   $('recBtn').textContent = '⏹ Стоп'; $('recBtn').className = 'rec-on';
   $('timer').hidden = false; $('timer').textContent = '0:00';
-  $('recStatus').textContent = live ? 'запись (live)…' : 'запись…';
-}
-
-/* --- клиентская детекция пауз: фраза уходит на сервер сразу --- */
-const LIVE_SILENCE_MS = 550;   // пауза, закрывающая фразу
-
-function liveFeed(frame) {
-  rec.phrase.push(frame);
-  let sum = 0;
-  for (let i = 0; i < frame.length; i++) sum += frame[i] * frame[i];
-  const rms = Math.sqrt(sum / frame.length);
-  const frameMs = frame.length / rec.sampleRate * 1000;
-
-  // Адаптивный порог: следим за шумовым полом (быстро падает на тихих
-  // кадрах, медленно ползёт вверх) — работает и с AGC, и без него
-  if (rec.noiseFloor === undefined) rec.noiseFloor = 0.02;
-  rec.noiseFloor = rms < rec.noiseFloor ? rms : rec.noiseFloor * 1.01;
-  const thr = Math.max(rec.noiseFloor * 3, 0.0025);
-
-  if (rms < thr) rec.silenceMs += frameMs;
-  else { rec.silenceMs = 0; rec.sawSpeech = true; }
-  // телеметрия для отладки живого режима (читается из консоли)
-  window.__liveDebug = { rms: +rms.toFixed(5), thr: +thr.toFixed(5), silenceMs: Math.round(rec.silenceMs), sawSpeech: rec.sawSpeech };
-
-  const bufMs = rec.phrase.reduce((n, c) => n + c.length, 0) / rec.sampleRate * 1000;
-  if (rec.sawSpeech && rec.silenceMs >= LIVE_SILENCE_MS && bufMs - rec.silenceMs >= 350) {
-    flushPhrase();
-  } else if (!rec.sawSpeech && bufMs > 4000) {
-    rec.phrase = [frame];               // копим тишину зря — сбрасываем буфер
-  } else if (bufMs >= 15000) {
-    flushPhrase();                      // страховка: очень длинная фраза
-  }
-}
-
-function flushPhrase() {
-  const phrase = rec.phrase;
-  rec.phrase = []; rec.silenceMs = 0; rec.sawSpeech = false;
-
-  const total = phrase.reduce((n, c) => n + c.length, 0);
-  if (total / rec.sampleRate < 0.35) return;
-  const pcm = new Float32Array(total);
-  let off = 0; for (const c of phrase) { pcm.set(c, off); off += c.length; }
-  const wav = encodeWav(downsample(pcm, rec.sampleRate, 16000), 16000);
-  const blob = new Blob([wav], { type: 'audio/wav' });
-  const t = ((Date.now() - rec.startedAt) / 1000).toFixed(2);
-  const { textEl, logEl, parts } = rec;   // рефы живут дольше rec
-
-  rec.chain = rec.chain.then(async () => {
-    const fd = new FormData();
-    fd.append('file', blob, 'phrase.wav');
-    fd.append('response_format', 'json');
-    const mdl = $('model').value;
-    if (mdl) fd.append('model', mdl);
-    const r = await fetch('/v1/audio/transcriptions', { method: 'POST', body: fd, headers: authHeaders() });
-    if (r.status === 401) { showGate('Сессия истекла — введите токен заново'); return; }
-    const j = await r.json().catch(() => ({}));
-    const text = (j.text || '').trim();
-    if (!text) return;
-    parts.push(text);
-    textEl.textContent = parts.join(' ');
-    const line = document.createElement('div');
-    line.className = 'log-line';
-    line.innerHTML = `<span class="log-t">${t} с</span><span class="log-type delta">фраза</span><span class="log-text">${esc(text)}</span>`;
-    logEl.appendChild(line);
-    logEl.scrollTop = logEl.scrollHeight;
-  }).catch(() => {});
+  $('recStatus').textContent = 'запись…';
 }
 
 function stopRecording() {
-  const { ctx, stream, node, src, chunks, sampleRate, timerId, live } = rec;
-  const finished = rec;
+  const { ctx, stream, node, src, chunks, sampleRate, timerId } = rec;
   clearInterval(timerId); node.disconnect(); src.disconnect();
   stream.getTracks().forEach(t => t.stop()); ctx.close();
-  if (live && rec.phrase.length) flushPhrase();   // хвост последней фразы
   rec = null;
 
   $('recBtn').textContent = '🎙 Записать с микрофона'; $('recBtn').className = 'primary';
@@ -481,18 +391,7 @@ function stopRecording() {
   let off = 0; for (const c of chunks) { pcm.set(c, off); off += c.length; }
   const wav = encodeWav(downsample(pcm, sampleRate, 16000), 16000);
   const blob = new Blob([wav], { type: 'audio/wav' });
-
-  if (!live) { transcribe(blob, 'recording.wav'); return; }
-
-  // живой режим: дождаться хвоста и финализировать карточку
-  finished.chain.then(() => {
-    const dur = total / sampleRate;
-    const card = finished.card;
-    card.querySelector('#live-mic')?.remove();
-    const meta = card.querySelector('.meta');
-    meta.textContent = `живая диктовка · ${finished.parts.length} фраз · 🎧 ${dur.toFixed(1)} с`;
-    card.insertAdjacentHTML('beforeend', `<audio controls src="${URL.createObjectURL(blob)}"></audio>`);
-  });
+  transcribe(blob, 'recording.wav');
 }
 
 function downsample(pcm, from, to) {
@@ -558,7 +457,7 @@ async function transcribe(blob, filename) {
     if (wts) { fd.append('timestamp_granularities[]', 'word'); fd.append('timestamp_granularities[]', 'segment'); }
     fd.append('chunking_strategy', vad ? 'auto' : 'none');
   } else {
-    url = `/gigaam/asr?output=${fmt}&language=${$('lang').value}&word_timestamps=${wts}&vad=${vad}`
+    url = `/stt/asr?output=${fmt}&language=${$('lang').value}&word_timestamps=${wts}&vad=${vad}`
         + (mdl ? `&model=${mdl}` : '');
     fd.append('audio_file', blob, filename);
   }
@@ -568,7 +467,7 @@ async function transcribe(blob, filename) {
   if (emo) {
     const efd = new FormData();
     efd.append('audio_file', blob, filename);
-    emoPromise = fetch('/gigaam/emotion', { method: 'POST', body: efd, headers: authHeaders() })
+    emoPromise = fetch('/stt/emotion', { method: 'POST', body: efd, headers: authHeaders() })
       .then(r => r.ok ? r.json() : r.text().then(t => ({ error: t })))
       .catch(e => ({ error: String(e) }));
   }
@@ -601,7 +500,7 @@ async function transcribeStream(card, blob, filename, mdl, vad) {
   let firstDelta = null, events = [], text = '';
 
   card.innerHTML = `
-    <div class="status" id="live-status"><span class="spin"></span>стриминг…</div>
+    <div class="status" id="stream-status"><span class="spin"></span>стриминг ответа…</div>
     <div class="result-text" style="min-height:52px"></div>
     <div class="stream-log"></div>
     <div class="meta"></div>`;
@@ -698,7 +597,7 @@ function renderResult(card, r) {
 
   const meta = [`⏱ ${r.elapsed.toFixed(2)} с`];
   if (r.duration) { meta.push(`🎧 ${r.duration.toFixed(1)} с`); meta.push(`⚡ ${(r.duration / r.elapsed).toFixed(1)}×`); }
-  meta.push(r.ep === 'openai' ? '/v1/audio/transcriptions' : '/gigaam/asr');
+  meta.push(r.ep === 'openai' ? '/v1/audio/transcriptions' : '/stt/asr');
   meta.push(r.fmt);
   if (r.mdl) meta.push(r.mdl);
 

@@ -71,7 +71,7 @@ def setup_torch_serialization():
 def main():
     """Главная функция запуска сервиса."""
     logger.info("=" * 60)
-    logger.info("gigaam-stt — GigaAM speech-to-text service")
+    logger.info("up-and-run-stt — GigaAM speech-to-text service")
     logger.info("=" * 60)
 
     # Import config to trigger cache directory initialization

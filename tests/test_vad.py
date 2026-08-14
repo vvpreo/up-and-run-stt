@@ -14,7 +14,7 @@ TIMEOUT = 300
 def _words(base_url, headers, path, vad: bool):
     with open(path, "rb") as f:
         r = requests.post(
-            f"{base_url}/gigaam/asr?output=json&word_timestamps=true&vad={str(vad).lower()}",
+            f"{base_url}/stt/asr?output=json&word_timestamps=true&vad={str(vad).lower()}",
             headers=headers,
             files={"audio_file": ("long.ogg", f)},
             timeout=TIMEOUT,

@@ -54,7 +54,7 @@ def set_asr_model(model: "ASRModel") -> None:
     _asr_model = model
 
 
-@router.post("/gigaam/asr", dependencies=[Depends(verify_token)])
+@router.post("/stt/asr", dependencies=[Depends(verify_token)])
 async def transcribe(
     audio_file: UploadFile = File(..., description="Audio file to transcribe"),
     model: Optional[str] = Query(None, description="GigaAM variant from the instance set (e.g. v3_e2e_ctc); empty -> default model"),

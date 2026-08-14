@@ -1,7 +1,7 @@
 """
 Endpoint распознавания эмоций (GigaAMEmo, только ONNX-бэкенд).
 
-POST /gigaam/emotion — принимает аудиофайл (поле `audio_file`), возвращает
+POST /stt/emotion — принимает аудиофайл (поле `audio_file`), возвращает
 вероятности эмоций. Модель ленивая: грузится при первом запросе (~1 ГБ RAM).
 """
 
@@ -29,7 +29,7 @@ def emotions_available() -> bool:
     return EMOTIONS_ENABLED and INFERENCE_BACKEND == "onnx"
 
 
-@router.post("/gigaam/emotion", dependencies=[Depends(verify_token)])
+@router.post("/stt/emotion", dependencies=[Depends(verify_token)])
 async def recognize_emotion(
     audio_file: UploadFile = File(..., description="Audio file to analyze"),
 ):

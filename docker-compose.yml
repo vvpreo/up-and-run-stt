@@ -1,4 +1,4 @@
-# gigaam-stt — local Russian STT service (GigaAM, CPU-only), OpenAI-compatible API.
+# up-and-run-stt — local Russian STT service (GigaAM, CPU-only), OpenAI-compatible API.
 #
 #   docker compose up -d        # build (first time) + start
 #   docker compose logs -f      # follow logs
@@ -13,14 +13,14 @@
 #   docker run -d -p 9007:9007 -v gigaam-models:/app/data <image>
 
 services:
-  gigaam-stt:
+  up-and-run-stt:
     build:
       context: .
       dockerfile: Dockerfile
-    image: gigaam-stt:latest
-    container_name: gigaam-stt
-    # Bind to 0.0.0.0 so the service is reachable from the Mac host (VoiceInk),
-    # other containers (dev-nginx) and internal services.
+    image: up-and-run-stt:latest
+    container_name: up-and-run-stt
+    # Bind to 0.0.0.0 so the service is reachable from other hosts on the
+    # network, from other containers and from a reverse proxy.
     ports:
       - "0.0.0.0:9007:9007"
     environment:
@@ -51,7 +51,7 @@ services:
       # named volume, so weights persist and are not re-downloaded.
       MODEL_CACHE_DIR: /app/data
       # 0 = never unload the model. Keep it "warm" for low first-request latency
-      # (important for interactive dictation via VoiceInk).
+      # (important for interactive dictation clients).
       MODEL_IDLE_TIMEOUT: "0"
       # Number of in-process model instances. 1 is right for a single-CPU box.
       MODEL_WORKERS: "1"

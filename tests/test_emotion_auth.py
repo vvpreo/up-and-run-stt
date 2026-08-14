@@ -1,5 +1,5 @@
 """
-Тесты /auth/check (гейт WebUI) и /gigaam/emotion (эмоции, ONNX-бэкенд).
+Тесты /auth/check (гейт WebUI) и /stt/emotion (эмоции, ONNX-бэкенд).
 """
 
 import pytest
@@ -38,7 +38,7 @@ def test_emotion_endpoint(base_url, auth_headers, short_wav):
 
     with open(short_wav, "rb") as f:
         r = requests.post(
-            f"{base_url}/gigaam/emotion",
+            f"{base_url}/stt/emotion",
             headers=auth_headers,
             files={"audio_file": ("a.wav", f)},
             timeout=TIMEOUT,  # первый вызов лениво грузит модель
@@ -55,7 +55,7 @@ def test_emotion_requires_token(base_url, short_wav, token):
         pytest.skip("AUTH_TOKEN not set — auth disabled")
     with open(short_wav, "rb") as f:
         r = requests.post(
-            f"{base_url}/gigaam/emotion",
+            f"{base_url}/stt/emotion",
             files={"audio_file": ("a.wav", f)},
             timeout=TIMEOUT,
         )

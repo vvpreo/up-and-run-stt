@@ -6,8 +6,8 @@
 (или окружении) с torch — публичный ONNX-образ сервиса конвертировать
 не умеет и скачивает уже готовые файлы:
 
-    docker exec gigaam-stt pip install --user onnx onnxruntime
-    docker exec gigaam-stt python /tmp/convert_onnx.py \
+    docker exec up-and-run-stt pip install --user onnx onnxruntime
+    docker exec up-and-run-stt python /tmp/convert_onnx.py \
         --out /app/data/onnx --cache /app/data/gigaam
 
 Результат — раскладка, совместимая с vendored `gigaam.onnx_utils.load_onnx`

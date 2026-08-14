@@ -1,103 +1,79 @@
-# gigaam-stt — локальный STT-сервис (GigaAM, CPU) с OpenAI-совместимым API
+# up-and-run-stt — local STT service (GigaAM, CPU) with an OpenAI-compatible API
 
-Локальный сервис распознавания речи (speech-to-text) на базе модели
-**GigaAM** (SberDevices, MIT) для **русского языка**, упакованный в один
-самодостаточный Docker-сервис с **OpenAI-совместимым HTTP API**.
+A local speech-to-text service built on the **GigaAM** model (SberDevices, MIT)
+for the **Russian language**, packaged as a single self-contained Docker service
+with an **OpenAI-compatible HTTP API**.
 
-Развёрнут на **DevBox** (Ubuntu, только CPU — GPU нет). Обслуживает нескольких
-потребителей одновременно:
+The codebase started as a fork of [`haiodo/oaitt`](https://github.com/haiodo/oaitt)
+(MIT). Only the **GigaAM Native** engine for CPU was kept; the MLX / WhisperX /
+Transformers variants were removed as unnecessary.
 
-1. **VoiceInk** (десктоп-диктовка на Mac) — через Custom-модель с
-   OpenAI-совместимым эндпоинтом.
-2. **Внутренние сервисы** — как drop-in замена OpenAI Whisper API.
-
-Основа — форк [`haiodo/oaitt`](https://github.com/haiodo/oaitt) (MIT). Оставлен
-только движок **GigaAM Native** под CPU; MLX/WhisperX/Transformers-варианты
-убраны за ненадобностью.
-
-> **Приоритет — качество русского.** Замеры WER/CER и выводы о пригодности —
-> в [`docs/RU_QUALITY.md`](docs/RU_QUALITY.md). Английский вне фокуса (GigaAM v3
-> на нём заведомо слабее).
+> **Russian quality is the priority.** WER/CER measurements and conclusions about
+> fitness for use live in [`docs/RU_QUALITY.md`](docs/RU_QUALITY.md). English is
+> out of scope (GigaAM v3 is knowingly weaker on it).
 
 ---
 
-## Быстрый старт
+## Quick start
 
 ```bash
-docker compose up -d          # сборка (первый раз) + запуск
-docker compose logs -f        # первый старт скачивает веса модели (~420 МБ)
+docker compose up -d          # build (first time) + run
+docker compose logs -f        # the first start downloads model weights (~420 MB)
 ```
 
-Вся конфигурация — в блоке `environment` файла `docker-compose.yml`
-(с комментариями по каждой переменной). Отдельного `.env` нет.
+All configuration lives in the `environment` block of `docker-compose.yml`
+(each variable is commented there). There is no separate `.env`.
 
-Либо без compose — готовым образом (сборка: `./build.sh [тег] [--push]`):
+Or without compose — from a prebuilt image (build with `./build.sh [tag] [--push]`):
 
 ```bash
-docker run -d --name gigaam-stt -p 9007:9007 \
+docker run -d --name up-and-run-stt -p 9007:9007 \
   -v gigaam-models:/app/data \
-  -e AUTH_TOKEN=<секрет> \
-  gigaam-stt:cpu
+  -e AUTH_TOKEN=<secret> \
+  up-and-run-stt:cpu
 ```
 
-Значения по умолчанию всех переменных зашиты в образ (ENV в `Dockerfile`),
-так что для старта достаточно проброса порта и тома под веса. Образ — **~0.7 ГБ**
-(инференс на ONNX Runtime, без PyTorch); веса моделей в образ не входят —
-скачиваются при первом старте с [vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx)
-(зеркало официальных весов, конвертация — `scripts/convert_onnx.py`).
-PyTorch-вариант для конвертации весов и сверки качества — `Dockerfile.torch`.
+Defaults for every variable are baked into the image (`ENV` in the `Dockerfile`),
+so a port mapping and a volume for the weights are enough to start. The image is
+**~0.7 GB** (inference on ONNX Runtime, no PyTorch); model weights are not part of
+the image — they are downloaded on first start from
+[vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx)
+(a mirror of the official weights; conversion script: `scripts/convert_onnx.py`).
+The PyTorch variant, used for weight conversion and quality cross-checks, is
+`Dockerfile.torch`.
 
-Проверка готовности:
+Readiness check:
 
 ```bash
 curl -s http://localhost:9007/health | python3 -m json.tool
 ```
 
-Ожидаемо: `"model_loaded": true`, `"engine": "gigaam"`.
+Expected: `"model_loaded": true`, `"engine": "gigaam"`.
 
-Сервис слушает `0.0.0.0:9007` и виден по сети (с Mac и из других контейнеров).
-После `reboot` поднимается сам (`restart: unless-stopped`).
+The service listens on `0.0.0.0:9007`, so it is reachable from other hosts on the
+network and from other containers. It comes back up after a reboot
+(`restart: unless-stopped`).
 
 ---
 
 ## API
 
-| Метод | Путь | Назначение |
+| Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/v1/audio/transcriptions` | OpenAI-совместимый (поле `file`). Для VoiceInk и OpenAI SDK. |
-| `POST` | `/gigaam/asr` | Нативный (поле `audio_file`), расширенный ответ: сегменты, слова, метрики. |
-| `POST` | `/gigaam/emotion` | Эмоции речи (GigaAMEmo): angry / sad / neutral / positive. |
-| `GET` | `/v1/models`, `/v1/models/{id}` | Список моделей инстанса (OpenAI-формат, для GUI-клиентов). |
-| `POST` | `/v1/audio/translations` | Не поддерживается (модель русскоязычная) — корректный 400. |
-| `GET`  | `/health` | Статус, модели, очередь, флаги фич, память. |
-| `GET`  | `/` | WebUI-консоль: вход по `AUTH_TOKEN`, микрофон/файл, оба контракта, все форматы, слова, эмоции ([src/static/index.html](src/static/index.html)). |
+| `POST` | `/v1/audio/transcriptions` | OpenAI-compatible (field `file`). For the OpenAI SDK and any client that speaks the Whisper API. |
+| `POST` | `/stt/asr` | Native (field `audio_file`), richer response: segments, words, metrics. |
+| `POST` | `/stt/emotion` | Speech emotion (GigaAMEmo): angry / sad / neutral / positive. |
+| `GET` | `/v1/models`, `/v1/models/{id}` | Models available on this instance (OpenAI format, for GUI clients). |
+| `POST` | `/v1/audio/translations` | Not supported (the model is Russian-only) — returns a proper 400. |
+| `GET`  | `/health` | Status, models, queue, feature flags, memory. |
+| `GET`  | `/` | WebUI console: log in with `AUTH_TOKEN`, mic/file input, both API contracts, all formats, word timestamps, emotions ([src/static/index.html](src/static/index.html)). |
 
-Также есть Swagger UI: `http://localhost:9007/docs`.
+A Swagger UI is also available at `http://localhost:9007/docs`.
 
-### Публичный доступ и авторизация
 
-Сервис опубликован на **https://gigam-stt.dev.vvpreo.net** через реверс-прокси
-`dev-nginx` (конфиг `nginx/conf.d/gigam-stt.conf` в проекте `dev-nginx`,
-wildcard-сертификат `*.dev.vvpreo.net`). По HTTPS работает и запись с
-микрофона на тестовой странице (secure context).
+### `POST /v1/audio/transcriptions` (OpenAI-compatible)
 
-Транскрипционные эндпоинты (`/v1/audio/transcriptions`, `/gigaam/asr`) защищены
-Bearer-токеном: ключ задан переменной `AUTH_TOKEN` в `docker-compose.yml` (см. значение
-там). Страница `/`, `/health` и `/docs` открыты. Без валидного токена API
-отвечает `401`.
-
-```bash
-curl -s https://gigam-stt.dev.vvpreo.net/v1/audio/transcriptions \
-  -H "Authorization: Bearer $AUTH_TOKEN" \
-  -F "file=@audio.wav" -F "response_format=json"
-```
-
-> ⚠️ Токен требуется **и при прямом доступе** по `:9007` (LAN/туннель) — в
-> VoiceInk и других потребителях нужно указать этот же ключ как API key.
-
-### `POST /v1/audio/transcriptions` (OpenAI-совместимый)
-
-Поле файла — **`file`** (как у OpenAI). `response_format`: `json` (по умолчанию),
+The file field is **`file`** (same as OpenAI). `response_format`: `json` (default),
 `text`, `verbose_json`, `srt`, `vtt`.
 
 ```bash
@@ -106,32 +82,44 @@ curl -s http://localhost:9007/v1/audio/transcriptions \
   -F "file=@audio.wav" \
   -F "response_format=json"
 
-# text → просто текст
+# text → plain text
 curl -s http://localhost:9007/v1/audio/transcriptions \
   -F "file=@audio.wav" -F "response_format=text"
 ```
 
-### `POST /gigaam/asr` (нативный)
+### `POST /stt/asr` (native)
 
-Поле файла — **`audio_file`**. Query-параметры: `output` (`json`/`text`/`srt`/`vtt`/`tsv`),
-`language`, `word_timestamps`, `model`, `vad` (VAD-чанкование, дефолт — `VAD_CHUNKING`).
+The file field is **`audio_file`**. Query parameters: `output`
+(`json`/`text`/`srt`/`vtt`/`tsv`), `language`, `word_timestamps`, `model`,
+`vad` (VAD chunking, defaults to `VAD_CHUNKING`).
 
 ```bash
-curl -s "http://localhost:9007/gigaam/asr?output=json&language=ru" \
+curl -s "http://localhost:9007/stt/asr?output=json&language=ru" \
   -F "audio_file=@audio.wav"
 ```
 
-Ответ (`output=json`) содержит `text`, `language`, при длинном аудио — `segments`,
-а также `confidence`/`chars_per_second` (диагностика).
+The response (`output=json`) contains `text`, `language`, plus `segments` for long
+audio, as well as `confidence` / `chars_per_second` (diagnostics).
 
-### SSE-стриминг (`stream=true`)
+### SSE streaming (`stream=true`) — response only
 
-OpenAI-совместимый стриминг: `-F "stream=true"` → `text/event-stream`
-с событиями `transcript.text.delta` (по мере распознавания чанков) и
-финальным `transcript.text.done` (полный текст + `usage`). Работает с
-OpenAI SDK (`stream=True`). Первый текст на длинном файле приходит через
-~1 с вместо ожидания полного ответа. Размер стрим-чанка — `STREAM_CHUNK_SEC`
-(дефолт 12 с); разрыв соединения отменяет инференс.
+> **Read this before designing a client.** What is streamed here is the
+> **response**, not the request. The audio still goes up as one complete HTTP
+> request; only the text comes back incrementally. There is no streaming *input*
+> — no WebSocket, no chunked request body, no way to feed a live microphone
+> into an open connection.
+
+This mirrors OpenAI exactly: their `/v1/audio/transcriptions` with `stream=true`
+also streams the response for an already-uploaded file. The input pipe lives in a
+different product — the Realtime API over WebSocket — which this service does not
+implement.
+
+How it works: `-F "stream=true"` → `text/event-stream` with
+`transcript.text.delta` events (emitted as the server finishes each chunk) and a
+final `transcript.text.done` (full text + `usage`). Works with the OpenAI SDK
+(`stream=True`). On a long file the first text arrives in ~1 s instead of waiting
+for the complete response. Stream chunk size is `STREAM_CHUNK_SEC` (default 12 s);
+dropping the connection cancels inference.
 
 ```bash
 curl -sN http://localhost:9007/v1/audio/transcriptions \
@@ -139,297 +127,268 @@ curl -sN http://localhost:9007/v1/audio/transcriptions \
   -F "file=@audio.ogg" -F "stream=true"
 ```
 
-### Живая диктовка (WebUI)
+**Practical consequence:** for a file you already have, text starts appearing
+almost immediately. For a live microphone, nothing can be transcribed until the
+recording is finished and sent — the model is offline (it needs a complete
+segment) and the transport has no way to deliver a partial request body. A client
+that wants text *while* the user is still speaking has to cut the audio itself and
+send each piece as a separate request, which is an application-level workaround,
+not a feature of this API.
 
-В консоли (`/`) при включённом тумблере «Стриминг» запись с микрофона идёт
-в живом режиме: браузер детектирует паузы (~550 мс) по уровню сигнала и
-отправляет каждую законченную фразу на сервер **не дожидаясь остановки
-записи** — текст появляется на экране по фразам, пока вы говорите.
+### Microphone in the WebUI
 
-Нюансы реализации (см. `src/static/index.html`):
-- микрофон запрашивается **без автоусиления и шумодава**
-  (`autoGainControl: false, noiseSuppression: false`) — AGC поднимает
-  тишину до уровня речи и ломает детекцию пауз;
-- порог тишины **адаптивный**: следит за шумовым полом (быстро опускается
-  на тихих кадрах, медленно ползёт вверх) — работает и в тихой комнате,
-  и с фоновым шумом;
-- фразы короче ~0.35 с отбрасываются; непрерывная речь дольше 15 с
-  дорезается принудительно; порядок текста сохраняется (очередь запросов);
-- страница отдаётся с `Cache-Control: no-cache`, а в подзаголовке виден
-  маркер сборки UI — если после обновления сервиса он не сменился,
-  браузер показывает кэш (Ctrl+Shift+R).
+The console (`/`) records from the microphone into a WAV file and, on **Stop**,
+sends it through exactly the same path as a drag-and-dropped file — including the
+"Response streaming" toggle, which then shows the text arriving in deltas. The
+browser does no voice activity detection and no chunking of its own; all
+segmentation happens on the server, where the silero-vad chunker lives.
 
-### Входные форматы аудио
+Notes (see `src/static/index.html`):
+- the microphone is requested **with auto gain and noise suppression off**
+  (`autoGainControl: false, noiseSuppression: false`) — the browser's
+  post-processing introduces artifacts the model was not trained on;
+- capture runs at the browser's native rate (usually 48 kHz) and is downsampled
+  to 16 kHz mono and encoded to WAV in the page before upload;
+- the page is served with `Cache-Control: no-cache`, and the UI build marker is
+  visible in the subtitle — if it does not change after a service update, the
+  browser is showing a cached copy (Ctrl+Shift+R).
 
-Принимаются практически все распространённые форматы: **wav, flac, mp3,
-ogg/vorbis, opus, m4a/aac, webm, wma** и другие. Декодирование двухступенчатое:
-сначала `libsndfile` (wav/flac/ogg/opus/mp3 — быстрый путь), для остального —
-фолбэк на статический бинарь `ffmpeg` в образе; ресемплинг — `scipy`
-(polyphase). «Сырые» PCM-байты без заголовка не принимаются — нужен контейнер
-(хотя бы WAV). Частота и число каналов входного файла не важны: всё
-автоматически приводится к 16 кГц моно.
+### Supported audio input formats
 
-Влияние формата на скорость — **пренебрежимо мало**. Замер на одном и том же
-клипе 137 с (i7-8750H, `v3_e2e_ctc`, лучший из прогонов):
+Practically every common format is accepted: **wav, flac, mp3, ogg/vorbis, opus,
+m4a/aac, webm, wma** and others. Decoding is two-stage: `libsndfile` first
+(wav/flac/ogg/opus/mp3 — the fast path), everything else falls back to the static
+`ffmpeg` binary shipped in the image; resampling uses `scipy` (polyphase). Raw
+headerless PCM bytes are not accepted — a container is required (WAV at minimum).
+The input file's sample rate and channel count do not matter: everything is
+converted to 16 kHz mono automatically.
 
-| Формат | Размер | Чистое декодирование | Полный запрос (localhost) |
+The effect of format on speed is **negligible**. Measured on the same 137 s clip
+(i7-8750H, `v3_e2e_ctc`, best of several runs):
+
+| Format | Size | Decode only | Full request (localhost) |
 |---|---|---|---|
-| m4a | 1.2 МБ | 89 мс | 6.5 с |
-| wma | 2.5 МБ | 113 мс | 6.9 с |
-| wav | 12.9 МБ | 157 мс | 6.4 с |
-| mp3 | 1.0 МБ | 213 мс | 6.7 с |
-| flac | 5.5 МБ | 224 мс | 6.3 с |
-| ogg | 0.8 МБ | 241 мс | 6.4 с |
-| webm | 1.1 МБ | 266 мс | 6.8 с |
-| opus | 1.1 МБ | 631 мс | 6.9 с |
+| m4a | 1.2 MB | 89 ms | 6.5 s |
+| wma | 2.5 MB | 113 ms | 6.9 s |
+| wav | 12.9 MB | 157 ms | 6.4 s |
+| mp3 | 1.0 MB | 213 ms | 6.7 s |
+| flac | 5.5 MB | 224 ms | 6.3 s |
+| ogg | 0.8 MB | 241 ms | 6.4 s |
+| webm | 1.1 MB | 266 ms | 6.8 s |
+| opus | 1.1 MB | 631 ms | 6.9 s |
 
-Декодирование занимает 0.09–0.6 с против ~6 с инференса (< 10% запроса);
-разброс полного времени между форматами сравним с шумом между прогонами.
-Практический вывод: **формат выбирайте по размеру передачи, а не по скорости
-декодирования** — по сети сжатый opus/mp3 (~1 МБ) выгоднее wav (~13 МБ),
-локально разницы нет.
-
----
-
-## Конфигурация (переменные окружения)
-
-Все параметры задаются переменными окружения в рантайме — в блоке
-`environment` файла `docker-compose.yml` (там же комментарии) или через
-`docker run -e`. Ключевые:
-
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `GIGAAM_MODELS` | `v3_e2e_ctc` | Набор моделей инстанса, через запятую (см. ниже). Первая — дефолт. Меняется без пересборки. |
-| `DEVICE` | `cpu` | Устройство инференса. GPU нет. |
-| `DEFAULT_LANGUAGE` | `ru` | Язык по умолчанию. |
-| `HOST` / `PORT` | `0.0.0.0` / `9007` | Bind внутри контейнера. |
-| `MODEL_CACHE_DIR` | `/app/data` | Кэш весов (том `gigaam-models`). |
-| `MODEL_IDLE_TIMEOUT` | `0` | `0` = не выгружать модель (держим «тёплой»). |
-| `MODEL_WORKERS` | `1` | Число инстансов модели в процессе. |
-| `AUTH_TOKEN` | *(пусто)* | Пусто = авторизация отключена. **В текущем compose задан** — Bearer-токен обязателен для транскрипционных эндпоинтов. |
-| `GIGAAM_MAX_SHORT_AUDIO_SEC` | `25.0` | Длиннее — режется на чанки. |
-| `GIGAAM_CHUNK_SEC` / `GIGAAM_MIN_CHUNK_SEC` | `30` / `5` | Размер чанков для длинного аудио. |
-| `VAD_CHUNKING` | `true` | Резка длинного аудио по паузам речи (silero-vad), тишина пропускается. Per-request: `?vad=` (нативный), `chunking_strategy=auto\|none` (OpenAI). |
-| `VAD_THRESHOLD` | `0.5` | Порог вероятности речи VAD (ниже — считается тишиной). |
-| `STREAM_CHUNK_SEC` | `12` | Целевой размер чанка при SSE-стриминге. |
-| `OMP_NUM_THREADS` | *(не задан)* | Ограничение потоков torch/OpenMP (по умолчанию = число физ. ядер). |
-| `MAX_UPLOAD_MB` | `200` | Лимит размера загружаемого аудио; сверх — `413`. `0` = без лимита. |
-| `MAX_PENDING_REQUESTS` | `8` | Лимит одновременных/ожидающих транскрипций; сверх — `429`. `0` = без лимита. |
-| `CORS_ORIGINS` | *(пусто)* | CORS-origin'ы через запятую (`*` = все). Пусто = CORS выключен. |
-| `ENABLE_DOCS` | `true` | `false` — скрыть `/docs`, `/redoc`, `/openapi.json`. |
-| `LOG_LEVEL` | `INFO` | Уровень логирования (DEBUG/INFO/WARNING/ERROR). |
-| `ENABLE_EMOTIONS` | `true` | `false` — отключить `/gigaam/emotion` (модель эмоций стоит ~1 ГБ RAM, грузится лениво при первом запросе). |
-| `INFERENCE_BACKEND` | `onnx` | `torch` — PyTorch-бэкенд (только образ из `Dockerfile.torch`). |
-
-### Модели: набор инстанса и выбор в запросе
-
-Инстанс обслуживает набор моделей из `GIGAAM_MODELS` (например,
-`v3_e2e_ctc,v3_e2e_rnnt`): все они загружаются при старте (веса докачиваются
-в том по необходимости) и держатся «тёплыми» в RAM — **~1.4 ГБ на каждую**.
-
-Конкретная модель выбирается **полем `model` в запросе** — как принято в
-OpenAI-совместимых API:
-
-- имя из набора (`v3_e2e_rnnt`, ...) → эта модель;
-- `whisper-1`, пусто или незнакомое имя → модель по умолчанию (первая в списке);
-- известный вариант GigaAM, не включённый на инстансе → `400` со списком доступных.
-
-```bash
-# OpenAI-эндпоинт: поле формы model
-curl -s http://localhost:9007/v1/audio/transcriptions \
-  -H "Authorization: Bearer $AUTH_TOKEN" \
-  -F "file=@audio.wav" -F "model=v3_e2e_rnnt"
-
-# Нативный эндпоинт: query-параметр model
-curl -s "http://localhost:9007/gigaam/asr?model=v3_e2e_rnnt&output=json" \
-  -H "Authorization: Bearer $AUTH_TOKEN" \
-  -F "audio_file=@audio.wav"
-```
-
-Набор моделей и дефолт видны в `/health` (`models`, `default_model`).
-При `MODEL_WORKERS > 1` пул работает только с моделью по умолчанию.
-
-#### Варианты моделей
-
-| Значение | Пунктуация | Комментарий |
-|---|---|---|
-| `v3_e2e_ctc` | да | **По умолчанию.** End-to-end, нормализация текста, самый быстрый. |
-| `v3_e2e_rnnt` | да | End-to-end, заявлено лучшее качество, медленнее. |
-| `v3_ctc` | нет | Без пунктуации, быстрый — запасной для интерактивной диктовки. |
-| `v3_rnnt` | нет | Без пунктуации, RNNT. |
-
-Смена набора **без пересборки образа**: правим `GIGAAM_MODELS` в
-`docker-compose.yml`, затем `docker compose up -d --force-recreate`.
+Decoding takes 0.09–0.6 s against ~6 s of inference (< 10% of the request); the
+spread in total time across formats is comparable to the noise between runs.
+Practical takeaway: **choose the format by transfer size, not by decode speed** —
+over the network, compressed opus/mp3 (~1 MB) beats wav (~13 MB); locally it makes
+no difference.
 
 ---
 
-## Персистентность моделей
+## Configuration (environment variables)
 
-Веса **не запечены в образ** и **не докачиваются при каждом старте**. Они лежат
-в именованном Docker-томе `gigaam-models`, смонтированном в `/app/data`
-(`MODEL_CACHE_DIR`). Скачиваются один раз при первом использовании модели и
-переживают рестарты и пересборки образа.
+Everything is configured through environment variables at runtime — in the
+`environment` block of `docker-compose.yml` (comments included there) or via
+`docker run -e`. 
 
-- Внутри контейнера: `/app/data/onnx/<model>.onnx` (+ `.yaml`); токенизаторы
-  e2e-моделей — `/app/data/gigaam/<model>_tokenizer.model`.
-- Источник весов: HF Hub [vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx)
-  (переопределяется `GIGAAM_ONNX_BASE_URL`); токенизаторы — CDN SberDevices.
-  Всё обычным HTTPS, без токенов.
-- Размер: fp32-модель ≈ 845 МБ (int8-варианты ≈ 215 МБ — `GIGAAM_ONNX_VARIANT=.int8`).
+### Models: the instance set and per-request selection
 
-Посмотреть содержимое тома:
+An instance serves the set of models listed in `GIGAAM_MODELS` (for example,
+`v3_e2e_ctc,v3_e2e_rnnt`): all of them are loaded at startup (weights are fetched
+into the volume as needed) and kept warm in RAM — **~1.4 GB each**.
+
+The model set and the default are visible in `/health` (`models`, `default_model`).
+With `MODEL_WORKERS > 1` the pool serves the default model only.
+
+#### Model variants
+
+| Value | Punctuation | Notes |
+|---|---|---|
+| `v3_e2e_ctc` | yes | **Default.** End-to-end, text normalization, fastest. |
+| `v3_e2e_rnnt` | yes | End-to-end, claimed best quality, slower. |
+| `v3_ctc` | no | No punctuation, fast — a fallback for interactive dictation. |
+| `v3_rnnt` | no | No punctuation, RNNT. |
+
+Changing the set **without rebuilding the image**: edit `GIGAAM_MODELS` in
+`docker-compose.yml`, then run `docker compose up -d --force-recreate`.
+
+---
+
+## Model persistence
+
+Weights are **not baked into the image** and **not re-downloaded on every start**.
+They live in the named Docker volume `gigaam-models`, mounted at `/app/data`
+(`MODEL_CACHE_DIR`). They are downloaded once, on first use of a model, and survive
+restarts and image rebuilds.
+
+- Inside the container: `/app/data/onnx/<model>.onnx` (+ `.yaml`); tokenizers for
+  the e2e models are at `/app/data/gigaam/<model>_tokenizer.model`.
+- Weights source: HF Hub [vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx)
+  (override with `GIGAAM_ONNX_BASE_URL`); tokenizers come from the SberDevices CDN.
+  All over plain HTTPS, no tokens involved.
+- Size: an fp32 model is ≈ 845 MB (int8 variants ≈ 215 MB — `GIGAAM_ONNX_VARIANT=.int8`).
+
+Inspect the volume contents:
 
 ```bash
 docker run --rm -v gigaam-models:/data alpine ls -lh /data/gigaam
 ```
 
-> Контейнер работает от непривилегированного пользователя (uid 1000). Если том
-> с весами был создан старой (root) версией образа, один раз выполните:
+> The container runs as an unprivileged user (uid 1000). If the weights volume was
+> created by an older (root) version of the image, run this once:
 > `docker run --rm -v gigaam-models:/data alpine chown -R 1000:1000 /data`.
 
 ---
 
-## Производительность (этот CPU)
+## Performance (on this CPU)
 
-Хост: **Intel Core i7-8750H** (6 ядер / 12 потоков, 2.2 ГГц), 64 ГБ RAM, без GPU.
+Host: **Intel Core i7-8750H** (6 cores / 12 threads, 2.2 GHz), 64 GB RAM, no GPU.
 
 <!-- PERF_TABLE_START -->
-Замерено на 30 клипах FLEURS `ru_ru` (6.2 мин чистой читаной речи). Подробности,
-анализ ошибок и оговорки — в [`docs/RU_QUALITY.md`](docs/RU_QUALITY.md).
+Measured on 30 clips from FLEURS `ru_ru` (6.2 min of clean read speech). Details,
+error analysis and caveats are in [`docs/RU_QUALITY.md`](docs/RU_QUALITY.md).
 
-| Модель | WER | CER | RTF | Скорость | RAM (загружена) |
+| Model | WER | CER | RTF | Speed | RAM (loaded) |
 |---|---|---|---|---|---|
 | `v3_e2e_rnnt` | **4.9 %** | 1.3 % | 0.111 | 9.0× | 1.44 GiB |
-| `v3_e2e_ctc` *(дефолт)* | 6.2 % | 1.3 % | 0.088 | 11.3× | 1.41 GiB |
+| `v3_e2e_ctc` *(default)* | 6.2 % | 1.3 % | 0.088 | 11.3× | 1.41 GiB |
 | `v3_ctc` | 8.3 % | 2.2 % | 0.091 | 10.9× | 1.42 GiB |
 
-**Рекомендация:** для лучшего качества русского — `v3_e2e_rnnt` (запаса скорости
-на CPU достаточно: клип 5–15 с обрабатывается за ~0.5–1.7 с). Дефолтный
-`v3_e2e_ctc` — чуть быстрее и почти так же точен.
+**Recommendation:** for the best Russian quality use `v3_e2e_rnnt` (there is plenty
+of speed headroom on CPU: a 5–15 s clip is processed in ~0.5–1.7 s). The default
+`v3_e2e_ctc` is slightly faster and nearly as accurate.
 <!-- PERF_TABLE_END -->
 
-**RTF** (realtime factor) = время обработки / длительность аудио; меньше — лучше
-(`0.1` ≈ в 10 раз быстрее реального времени). Для коротких диктовочных клипов
-(2–15 с) задержка складывается из RTF·длительность + сетевой оверхед.
+**RTF** (realtime factor) = processing time / audio duration; lower is better
+(`0.1` ≈ 10× faster than realtime). For short dictation clips (2–15 s), latency is
+RTF·duration plus network overhead.
 
-### Масштабирование по ядрам (один worker)
+### Scaling across cores (single worker)
 
-Скорость инференса растёт по ядрам **нелинейно** — отдача быстро затухает
-(мелкие операции не параллелятся, ядра упираются в общую шину памяти).
-Замер: тот же i7-8750H, `v3_e2e_ctc`, клип 20 с, `torch.set_num_threads(N)`,
-лучший из 3 прогонов:
+Inference speed scales **non-linearly** with cores — returns diminish quickly
+(small ops do not parallelize, and the cores contend for the shared memory bus).
+Measurement: the same i7-8750H, `v3_e2e_ctc`, a 20 s clip,
+`torch.set_num_threads(N)`, best of 3 runs:
 
-| Потоков CPU | Время | Ускорение | Скорость | КПД на ядро |
+| CPU threads | Time | Speedup | Speed | Per-core efficiency |
 |---|---|---|---|---|
-| 1 | 2.37 с | ×1.0 | 8.5× | 8.5× |
-| 2 | 1.37 с | ×1.73 | 14.6× | 7.3× |
-| 3 | 1.05 с | ×2.26 | 19.0× | 6.3× |
-| 4 | 0.90 с | ×2.63 | 22.3× | 5.6× |
-| 6 | 0.83 с | ×2.86 | 24.2× | 4.0× |
+| 1 | 2.37 s | ×1.0 | 8.5× | 8.5× |
+| 2 | 1.37 s | ×1.73 | 14.6× | 7.3× |
+| 3 | 1.05 s | ×2.26 | 19.0× | 6.3× |
+| 4 | 0.90 s | ×2.63 | 22.3× | 5.6× |
+| 6 | 0.83 s | ×2.86 | 24.2× | 4.0× |
 
-Практические выводы для настройки `MODEL_WORKERS` × `OMP_NUM_THREADS`:
+Practical conclusions for tuning `MODEL_WORKERS` × `OMP_NUM_THREADS`:
 
-- **Минимальная задержка одиночного запроса** (интерактивная диктовка,
-  один пользователь): 1 worker со всеми ядрами — текущий дефолт.
-  При этом 3–4 ядра дают почти тот же результат, что и 6.
-- **Максимальная суммарная пропускная способность** (несколько параллельных
-  клиентов): выгоднее несколько worker'ов по 2–3 ядра — например,
-  3 worker'а × 2 потока дают в сумме ~44× реального времени против 24× у
-  «1 worker × 6 потоков» на тех же ядрах. Цена: +~1.4 ГБ RAM на каждый
-  дополнительный worker (своя копия модели) и более медленный каждый
-  отдельный запрос; реальная сумма чуть ниже теоретической из-за общей
-  шины памяти.
+- **Minimum latency for a single request** (interactive dictation, one user):
+  1 worker with all cores — the current default. Note that 3–4 cores already give
+  almost the same result as 6.
+- **Maximum aggregate throughput** (several concurrent clients): several workers
+  with 2–3 cores each is a better deal — for example, 3 workers × 2 threads add up
+  to ~44× realtime versus 24× for "1 worker × 6 threads" on the same cores. The
+  price: ~1.4 GB of extra RAM per additional worker (its own copy of the model) and
+  a slower individual request; the real total is slightly below the theoretical one
+  because of the shared memory bus.
 
-На другом железе абсолютные цифры будут другими, но форма кривой
-(затухающая отдача после 2–4 ядер) — типична для CPU-инференса torch.
+On different hardware the absolute numbers will differ, but the shape of the curve
+(diminishing returns past 2–4 cores) is typical for CPU inference with torch.
 
 ---
 
-## Интеграция
+## Integration
 
-### VoiceInk (Mac)
+### Desktop dictation clients
 
-VoiceInk → **AI Models → Custom**:
+Any dictation app that lets you point it at a custom OpenAI-compatible endpoint
+works without adaptation. Typical settings:
 
-- **API Endpoint:** `http://<адрес-сервиса>:9007/v1/audio/transcriptions`
-- **API Key:** значение `AUTH_TOKEN` из `docker-compose.yml` (авторизация включена)
-- **Model Name:** `whisper-1` (для OpenAI-эндпоинта поле игнорируется)
+- **API Endpoint:** `http://<service-address>:9007/v1/audio/transcriptions`
+- **API Key:** the `AUTH_TOKEN` value the service was started with (leave empty if
+  authorization is disabled)
+- **Model Name:** `whisper-1` — or any name from `GIGAAM_MODELS` to pick a
+  specific model
 
-Важно: именно `http://` (не `https`), и адрес DevBox должен быть достижим с Mac
-(один LAN — прямой IP; удалённый DevBox — SSH port-forward `-L 9007:localhost:9007`).
-Проверьте сеть/фаервол. Конкретные реквизиты — см. отдельное сообщение / раздел ниже.
+Two things to check if it does not connect: the scheme is `http://` unless you put
+the service behind a TLS-terminating proxy, and the host must actually be reachable
+from the client machine (same LAN — direct IP; a remote host — an SSH port forward
+such as `-L 9007:localhost:9007`).
 
-### Другой проект — OpenAI Python SDK
+### OpenAI Python SDK
 
-Сервис — drop-in замена OpenAI Whisper API:
+The service is a drop-in replacement for the OpenAI Whisper API:
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(base_url="http://<адрес-сервиса>:9007/v1/", api_key="<AUTH_TOKEN>")
+client = OpenAI(base_url="http://<service-address>:9007/v1/", api_key="<AUTH_TOKEN>")
 
 with open("audio.wav", "rb") as f:
     r = client.audio.transcriptions.create(
-        model="whisper-1",          # игнорируется
+        model="whisper-1",          # ignored
         file=f,
         language="ru",
-        response_format="json",     # или "text", "verbose_json"
+        response_format="json",     # or "text", "verbose_json"
     )
 print(r.text)
 ```
 
-Прямой `curl` — см. раздел [API](#api) выше (и `/v1/...`, и `/gigaam/asr`).
+For plain `curl`, see the [API](#api) section above (both `/v1/...` and `/stt/asr`).
 
 ---
 
-## Оценка качества русского
+## Russian quality evaluation
 
-Замеры WER/CER + RTF + RAM по русскому набору и сравнение вариантов модели —
-[`docs/RU_QUALITY.md`](docs/RU_QUALITY.md). Бенчмарк-инструментарий из проекта
-убран (проект высушен до рабочего минимума); результаты сохранены в отчёте.
+WER/CER measurements plus RTF and RAM on a Russian dataset, and a comparison of the
+model variants, are in [`docs/RU_QUALITY.md`](docs/RU_QUALITY.md). The benchmark
+tooling was removed from the project (it was trimmed down to a working minimum);
+the results are preserved in the report.
 
 ---
 
-## Управление
+## Operations
 
 ```bash
-docker compose up -d / down / logs -f / ps       # сервис
-./build.sh                                       # сборка локального образа
-./build.sh myuser/gigaam-stt --push              # сборка + публикация на Docker Hub
-curl -s localhost:9007/health | python3 -m json.tool   # статус
+docker compose up -d / down / logs -f / ps       # the service
+./build.sh                                       # build a local image
+./build.sh myuser/up-and-run-stt --push              # build + publish to Docker Hub
+curl -s localhost:9007/health | python3 -m json.tool   # status
 
-# быстрый прогон на семпле (токен — из docker-compose.yml):
+# quick run against the bundled sample (token — from docker-compose.yml):
 curl -s localhost:9007/v1/audio/transcriptions \
   -H "Authorization: Bearer <AUTH_TOKEN>" \
   -F "file=@sample-data/Sobolev_Andrey_1_0_00-2_17.ogg" -F "response_format=text"
 ```
 
-## Тесты
+## Tests
 
-Интеграционные тесты ходят в работающий сервис (`docker compose up -d`,
-дождаться `model_loaded: true`):
+The integration tests talk to a running service (`docker compose up -d`, then wait
+for `model_loaded: true`):
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/pytest tests/ -v
 ```
 
-Покрытие: /health, авторизация, оба эндпоинта, реестр моделей, все входные
-форматы, лимит размера (`413`), backpressure (`429`), живость event loop во
-время транскрипции. Другой адрес сервиса — через `STT_BASE_URL` / `STT_AUTH_TOKEN`.
+Coverage: /health, authorization, both endpoints, the model registry, every input
+format, the size limit (`413`), backpressure (`429`), and event-loop liveness during
+transcription. To point them at a different service address, use `STT_BASE_URL` /
+`STT_AUTH_TOKEN`.
 
 ## Troubleshooting
 
-- **`/health` долго не `model_loaded:true`** — первый старт скачивает веса;
-  смотрите `docker compose logs -f`. `start_period` healthcheck = 300 с.
-- **С Mac не достучаться** — проверьте, что порт `9007` виден с Mac (LAN/SSH),
-  используется `http://`, фаервол не режет.
-- **Медленно на длинном аудио** — это CPU; для интерактивной диктовки берите
-  короткие клипы и при необходимости `v3_ctc` (быстрее, без пунктуации).
+- **`/health` stays at `model_loaded: false` for a long time** — the first start
+  downloads the weights; watch `docker compose logs -f`. The healthcheck
+  `start_period` is 300 s.
+- **Not reachable from another machine** — check that port `9007` is visible from
+  the client (LAN/SSH), that you are using `http://`, and that the firewall is not
+  blocking it.
+- **Slow on long audio** — that is the CPU; for interactive dictation use short
+  clips and, if needed, `v3_ctc` (faster, no punctuation).
 
-## Лицензии и авторство
+## Licenses and credits
 
-- Проект базируется на работе **Андрея Соболева** ([haiodo/oaitt](https://github.com/haiodo/oaitt)) —
-  оригинального автора сервера OAITT. Этот форк и `haiodo/oaitt` — MIT
-  (см. `LICENSE`, копирайт Andrey Sobolev сохранён).
-- `gigaam` (vendored в `vendor/gigaam`) — MIT, SberDevices.
+- The project is based on the work of **Andrey Sobolev**
+  ([haiodo/oaitt](https://github.com/haiodo/oaitt)) — the original author of the
+  OAITT server. This fork and `haiodo/oaitt` are MIT (see `LICENSE`; the Andrey
+  Sobolev copyright is preserved).
+- `gigaam` (vendored under `vendor/gigaam`) — MIT, SberDevices.

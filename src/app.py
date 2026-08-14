@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     global _asr_model
 
     # Startup
-    logger.info(f"Starting gigaam-stt v{__version__}")
+    logger.info(f"Starting up-and-run-stt v{__version__}")
     logger.info("Initializing GigaAM ASR")
 
     try:
@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
-    logger.info("Shutting down gigaam-stt")
+    logger.info("Shutting down up-and-run-stt")
     for name, model in list_models().items():
         model.release_model()
         logger.info(f"ASR model released: {name}")
@@ -119,13 +119,13 @@ def create_app() -> FastAPI:
         >>> uvicorn.run(app, host="0.0.0.0", port=9007)
     """
     app = FastAPI(
-        title="gigaam-stt",
+        title="up-and-run-stt",
         description=(
             "Speech-to-text service powered by GigaAM (SberDevices) — "
             "high-quality Russian ASR.\n\n"
             "Endpoints:\n"
             "- **/v1/audio/transcriptions** — OpenAI-compatible (drop-in Whisper API replacement)\n"
-            "- **/gigaam/asr** — native endpoint with extended response (segments, metrics)\n\n"
+            "- **/stt/asr** — native endpoint with extended response (segments, metrics)\n\n"
             "The instance serves the model set from GIGAAM_MODELS; a specific "
             "model is selected per request via the `model` field."
         ),

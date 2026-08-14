@@ -3,8 +3,8 @@
 Заливка сконвертированных ONNX-весов GigaAM на Hugging Face Hub.
 
 Запуск в контейнере (веса в томе) с токеном в env:
-    docker exec gigaam-stt pip install --user huggingface_hub
-    docker exec -e HF_TOKEN=... gigaam-stt python /tmp/upload_onnx_hf.py \
+    docker exec up-and-run-stt pip install --user huggingface_hub
+    docker exec -e HF_TOKEN=... up-and-run-stt python /tmp/upload_onnx_hf.py \
         --repo vvpreo/gigaam-v3-onnx --dir /app/data/onnx
 
 Токен нужен с правом Write. Репозиторий создаётся, если его нет.
@@ -29,8 +29,8 @@ ONNX Runtime без PyTorch, плюс модель эмоций **GigaAMEmo**.
 
 Сконвертировано из официальных чекпойнтов
 (`cdn.chatwm.opensmodel.sberdevices.ru/GigaAM`) скриптом
-[`scripts/convert_onnx.py`](https://github.com/vvpreo/gigaam-stt) проекта
-gigaam-stt (vendored `gigaam.to_onnx()` + `onnxruntime.quantization.quantize_dynamic`).
+[`scripts/convert_onnx.py`](https://github.com/vvpreo/up-and-run-stt) проекта
+up-and-run-stt (vendored `gigaam.to_onnx()` + `onnxruntime.quantization.quantize_dynamic`).
 Раскладка файлов совместима с `gigaam.onnx_utils.load_onnx`.
 
 | Модель | Файлы | Назначение |
@@ -43,7 +43,7 @@ gigaam-stt (vendored `gigaam.to_onnx()` + `onnxruntime.quantization.quantize_dyn
 Токенизаторы (sentencepiece, для `*_e2e_*`) скачиваются с CDN SberDevices:
 `{name}_tokenizer.model`.
 
-Используется сервисом [gigaam-stt](https://hub.docker.com/) — русский STT
+Используется сервисом [up-and-run-stt](https://hub.docker.com/) — русский STT
 с OpenAI-совместимым API в одном Docker-образе.
 
 Лицензия — MIT (наследуется от GigaAM, SberDevices).

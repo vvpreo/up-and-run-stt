@@ -103,7 +103,7 @@ async def health_check() -> dict:
         "pending_requests": pending_count(),
         # Требуется ли Bearer-токен (для гейта WebUI)
         "auth_required": bool(AUTH_TOKEN),
-        # Доступно ли распознавание эмоций (/gigaam/emotion)
+        # Доступно ли распознавание эмоций (/stt/emotion)
         "emotions_enabled": emotions_available(),
         # Включён ли Swagger UI (/docs) и OpenAPI-схема (/openapi.json)
         "docs_enabled": ENABLE_DOCS,

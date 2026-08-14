@@ -1,4 +1,4 @@
-# Dockerfile — основной образ gigaam-stt: инференс на ONNX Runtime, без PyTorch.
+# Dockerfile — основной образ up-and-run-stt: инференс на ONNX Runtime, без PyTorch.
 # ONNX-веса НЕ запечены в образ: скачиваются при первом старте с HF Hub
 # (GIGAAM_ONNX_BASE_URL, по умолчанию vvpreo/gigaam-v3-onnx) в том gigaam-models.
 # Токенизаторы e2e-моделей — с CDN SberDevices.

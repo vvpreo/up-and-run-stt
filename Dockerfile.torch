@@ -1,4 +1,4 @@
-# Dockerfile.torch — PyTorch-вариант gigaam-stt (legacy / инструментальный).
+# Dockerfile.torch — PyTorch-вариант up-and-run-stt (legacy / инструментальный).
 # Основной образ теперь ONNX (см. Dockerfile). Этот нужен для:
 #  - конвертации весов в ONNX (scripts/convert_onnx.py требует torch),
 #  - запуска с INFERENCE_BACKEND=torch (эталон для сверки качества).

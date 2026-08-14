@@ -23,7 +23,7 @@ def _openai(base_url, headers, wav, fmt):
 def _native(base_url, headers, wav, fmt):
     with open(wav, "rb") as f:
         return requests.post(
-            f"{base_url}/gigaam/asr?output={fmt}",
+            f"{base_url}/stt/asr?output={fmt}",
             headers=headers,
             files={"audio_file": ("a.wav", f)},
             timeout=TIMEOUT,

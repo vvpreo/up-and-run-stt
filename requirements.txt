@@ -1,4 +1,4 @@
-# Зависимости сервиса gigaam-stt (GigaAM native, CPU).
+# Зависимости сервиса up-and-run-stt (GigaAM native, CPU).
 # Образ собирается по Dockerfile.cpu (там свой список pip install по слоям);
 # этот файл — для локальной разработки/IDE. Списки должны совпадать по составу.
 

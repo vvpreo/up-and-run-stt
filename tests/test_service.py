@@ -105,7 +105,7 @@ def test_openai_endpoint_text(base_url, auth_headers, short_wav):
 def test_native_endpoint(base_url, auth_headers, short_wav):
     with open(short_wav, "rb") as f:
         r = requests.post(
-            f"{base_url}/gigaam/asr?output=json&language=ru",
+            f"{base_url}/stt/asr?output=json&language=ru",
             headers=auth_headers,
             files={"audio_file": ("a.wav", f)},
             timeout=TIMEOUT,

@@ -9,7 +9,7 @@ logs
 *.log
 bench_results
 
-# gigaam-stt local
+# up-and-run-stt local
 .env
 .tmp/
 .venv/

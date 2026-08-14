@@ -1,7 +1,8 @@
 """
-Серверная часть «живой диктовки»: WebUI шлёт короткие пофразные wav-запросы
-последовательно, ПОКА запись ещё идёт. Тесты воспроизводят этот паттерн без
-браузера: нарезка речи на фразы -> быстрые последовательные POST'ы.
+Паттерн десктопной диктовки: клиент шлёт много коротких wav-запросов подряд
+(на каждое нажатие «диктовать» — отдельный клип). Проверяем, что сервис держит
+такой поток: каждый ответ быстрее длительности клипа, огрызки не роняют раут,
+/health не голодает под нагрузкой.
 """
 
 import subprocess
@@ -34,7 +35,7 @@ def _post_phrase(base_url, headers, path):
 
 
 def test_sequential_phrases_fast_and_ordered(base_url, auth_headers, sample_path, tmp_path):
-    """Три фразы подряд (как из живой диктовки): каждая быстрая и непустая."""
+    """Три коротких клипа подряд: каждый обрабатывается быстро и непустой."""
     phrases = [
         _cut(sample_path, tmp_path, "p1", 0, 3),
         _cut(sample_path, tmp_path, "p2", 12, 3),
@@ -51,13 +52,13 @@ def test_sequential_phrases_fast_and_ordered(base_url, auth_headers, sample_path
 
     assert all(texts), f"empty phrase transcription: {texts}"
     assert "проверяем" in texts[0].lower()
-    # Живой режим осмыслен, только если фраза обрабатывается быстрее, чем
-    # произносится: 3-с фраза должна уходить сильно быстрее 3 с.
-    assert max(latencies) < 3.0, f"phrase latency too high for live mode: {latencies}"
+    # Диктовка осмысленна, только если клип обрабатывается быстрее, чем
+    # произносится: 3-с клип должен уходить сильно быстрее 3 с.
+    assert max(latencies) < 3.0, f"phrase latency too high for dictation: {latencies}"
 
 
 def test_tiny_fragment_does_not_error(base_url, auth_headers, sample_path, tmp_path):
-    """Огрызок в полсекунды (дребезг детектора пауз) не должен ронять сервер."""
+    """Огрызок в полсекунды (случайное нажатие) не должен ронять сервер."""
     tiny = _cut(sample_path, tmp_path, "tiny", 5.0, 0.5)
     r = _post_phrase(base_url, auth_headers, tiny)
     assert r.status_code == 200, r.text
@@ -65,7 +66,7 @@ def test_tiny_fragment_does_not_error(base_url, auth_headers, sample_path, tmp_p
 
 
 def test_phrase_requests_do_not_starve_health(base_url, auth_headers, sample_path, tmp_path):
-    """Во время потока фразовых запросов /health остаётся отзывчивым."""
+    """Во время потока коротких запросов /health остаётся отзывчивым."""
     import concurrent.futures
 
     phrase = _cut(sample_path, tmp_path, "ph", 0, 3)
