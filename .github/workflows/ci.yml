@@ -20,6 +20,10 @@ jobs:
     name: ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    permissions:
+      contents: read
+      # Базовый образ для тестов лежит в GHCR этого же репозитория
+      packages: read
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +37,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Веса моделей (~845 МБ) качаются с HF при первом старте. Без кэша
       # это происходило бы на каждом прогоне; ключ включает архитектуру,
@@ -63,7 +73,10 @@ jobs:
           # Контейнер работает от uid 1000, каталог создаёт runner — открываем
           # права, иначе сервису некуда сложить скачанные веса.
           mkdir -p .ci-models && chmod 777 .ci-models
-          docker run -d --name stt -p 9007:9007 \
+          # Общая сеть с контейнером тестов: он ходит в сервис по имени stt.
+          # Порт наружу публикуем всё равно — по нему ждёт готовности шаг ниже.
+          docker network create ci
+          docker run -d --name stt --network ci -p 9007:9007 \
             -v "$PWD/.ci-models:/app/data" \
             -e AUTH_TOKEN="$AUTH_TOKEN" \
             up-and-run-stt:ci
@@ -81,22 +94,19 @@ jobs:
           docker logs stt >&2
           exit 1
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      # Тестам нужен ffmpeg НА РАННЕРЕ (не в образе): они нарезают из сэмпла
-      # короткие клипы и перекодируют его в 8 форматов, чтобы проверить
-      # декодирование. В образах GitHub Actions ffmpeg не предустановлен —
-      # ни на amd64, ни на arm64.
-      - name: Install ffmpeg (test fixtures)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-
+      # Тесты гоняются В НАШЕМ базовом образе (ghcr.io/<repo>-ci), где уже
+      # лежат ffmpeg, pytest и requests. На раннер при этом не ставится
+      # ничего: ни apt-пакетов, ни рантайм-зависимостей сервиса
+      # (onnxruntime/scipy/numpy ~250 МБ), которые тестам не нужны — они
+      # общаются с сервисом по HTTP. Образ собирает .github/workflows/ci-image.yml.
       - name: Run integration tests
-        env:
-          STT_BASE_URL: http://localhost:9007
-          STT_AUTH_TOKEN: ci-test-token
-        run: uv run --group dev pytest tests/ -v
+        run: |
+          docker run --rm --network ci \
+            -v "$PWD:/workspace" -w /workspace \
+            -e STT_BASE_URL=http://stt:9007 \
+            -e STT_AUTH_TOKEN=ci-test-token \
+            "ghcr.io/${GITHUB_REPOSITORY}-ci:latest" \
+            pytest tests/ -v
 
       - name: Service logs on failure
         if: failure()

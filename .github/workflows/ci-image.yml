@@ -1,0 +1,93 @@
+# Сборка и публикация базового образа для тестов в GitHub Container Registry.
+# Отдельный воркфлоу, потому что образ меняется редко: пересобирается только
+# при правке своего Dockerfile или вручную. CI его просто тянет готовым.
+#
+# Аутентификация — встроенным GITHUB_TOKEN, никаких дополнительных секретов
+# не нужно; права выдаются через permissions.packages ниже.
+name: CI image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/ci-image/Dockerfile
+      - .github/workflows/ci-image.yml
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}-ci
+
+jobs:
+  build:
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Каждая архитектура пушится по дайджесту; в один тег их сшивает merge.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .github/ci-image
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Save digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > "/tmp/digests/${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-image-digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: ci-image-digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifest
+        run: |
+          SRCS=""
+          for f in /tmp/digests/*; do
+            SRCS="$SRCS ${{ env.IMAGE }}@$(cat "$f")"
+          done
+          docker buildx imagetools create -t "${{ env.IMAGE }}:latest" $SRCS
+          docker buildx imagetools inspect "${{ env.IMAGE }}:latest"
