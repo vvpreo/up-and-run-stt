@@ -27,6 +27,12 @@ jobs:
   # ---------------------------------------------------------------- версия
   version:
     runs-on: ubuntu-latest
+    # Джоб коммитит бамп версии и пушит тег — без этого права GITHUB_TOKEN
+    # может оказаться read-only (зависит от настроек репозитория) и push
+    # упадёт. В dry_run эти шаги пропускаются, поэтому холостой прогон
+    # такую поломку не поймал бы.
+    permissions:
+      contents: write
     outputs:
       version: ${{ steps.bump.outputs.version }}
       created: ${{ steps.bump.outputs.created }}
@@ -183,12 +189,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # --generate-notes сам находит предыдущий тег; явный
+          # --notes-start-tag ломался бы на ПЕРВОМ релизе, когда
+          # предыдущего тега ещё нет.
           V="${{ needs.version.outputs.version }}"
-          gh release create "v$V" \
-            --title "v$V" \
-            --generate-notes \
-            --notes-start-tag "$(git describe --tags --abbrev=0 "v$V^" 2>/dev/null || echo '')" \
-            || gh release create "v$V" --title "v$V" --generate-notes
+          gh release create "v$V" --title "v$V" --generate-notes
 
   # ------------------------------------------------------------ edge-образ
   # Не относится к релизу: отдельный воркфлоу держал бы дубль сборки, а так
