@@ -245,57 +245,30 @@ regular JSON endpoint because OpenAPI cannot describe a WebSocket.
 
 ### Microphone in the WebUI
 
-One button, **🎙 Начать запись**; the mode is chosen by the
-**Стриминг ответа фразами** toggle, which is the only thing a user of the console
-actually cares about — whether text arrives as it is ready or all at once at the
-end. Which transport delivers it is an implementation detail:
+The console makes the endpoint an explicit choice, because there are four of
+them and they are not variations of one another:
 
-- **toggle off** — records into a WAV file and, on Stop, sends it through exactly
-  the same path as a drag-and-dropped file.
-- **toggle on** — opens the WebSocket above and streams PCM as you speak, showing
-  each phrase as it comes back along with a live event log.
+| Выбор | Ручка | Что делает |
+|---|---|---|
+| OpenAI | `POST /v1/audio/transcriptions` | Whisper-compatible. The only one with `stream=true` (SSE response streaming). |
+| Нативная | `POST /stt/asr` | Our own; richer response. Ignores `stream`. |
+| Живая диктовка | `WS /stt/stream` | Input streams; phrases come back while you speak. Microphone only. |
+| Эмоции | `POST /stt/emotion` | Additive — runs in parallel with any of the above. |
 
-The same toggle keeps its meaning for uploaded files, where it turns on SSE
-response streaming. Either way the browser does no voice activity detection and no
-chunking of its own; all segmentation happens on the server.
+The first three are mutually exclusive and picked from one selector; emotions is
+a checkbox because it is a separate parallel request, not a mode.
 
-Notes (see `src/static/index.html`):
-- the microphone is requested **with auto gain and noise suppression off**
-  (`autoGainControl: false, noiseSuppression: false`) — the browser's
-  post-processing introduces artifacts the model was not trained on;
-- capture runs at the browser's native rate (usually 48 kHz) and is downsampled
-  to 16 kHz mono and encoded to WAV in the page before upload;
-- the page is served with `Cache-Control: no-cache`, and the UI build marker is
-  visible in the subtitle — if it does not change after a service update, the
-  browser is showing a cached copy (Ctrl+Shift+R).
+This matters because "streaming" meant two unrelated things and one checkbox used
+to cover both. `stream=true` is a **parameter** of the OpenAI endpoint that
+changes how the response comes back; the live WebSocket is a **different endpoint**
+that changes how audio goes in. They are now in different places in the UI, and
+each endpoint shows only the options that belong to it — response format and word
+timestamps disappear for the live endpoint, `stream=true` appears only under
+OpenAI, and a line under the controls states what is in effect.
 
-### What combines with what
-
-Not every option applies in every mode, and the server silently ignores the ones
-that do not. The table is what the API actually does, verified by request:
-
-| | Native `/stt/asr` | OpenAI, plain | OpenAI, `stream=true` | Live WebSocket |
-|---|---|---|---|---|
-| Response format | `json` `text` `srt` `vtt` `tsv` | `json` `text` `verbose_json` `srt` `vtt` | **ignored** — always deltas | **ignored** — always deltas |
-| Word timestamps | `json` only | `verbose_json` only | not available | not available |
-| VAD chunking | applies | applies | **applies** (60 s clip: 11 deltas vs 5) | always on |
-| Emotions | yes | yes | yes | yes |
-| Model choice | yes | yes | yes | yes |
-| Streaming | not supported | — | — | — |
-
-Two things worth calling out. `stream=true` **ignores** `response_format` and
-`timestamp_granularities` rather than rejecting them: asking for `srt` with
-streaming returns SSE deltas, not subtitles. And the native endpoint ignores
-`stream` entirely — it answers with ordinary JSON, so streaming exists only on the
-OpenAI contract and on the WebSocket.
-
-Emotions are orthogonal to all of this: they are a separate request to a separate
-model (`/stt/emotion`), so they work in every mode and are unaffected by which
-recognition model you picked.
-
-The WebUI encodes this table — options that do not apply in the current mode are
-greyed out with the reason in their tooltip, and a line under the controls
-summarises what is in effect.
+Audio goes in through one block: drop a file, click the frame to pick one, or
+press **🎙 Начать запись**. With the live endpoint selected the file half is
+disabled, since a WebSocket session takes a microphone rather than a file.
 
 ### Supported audio input formats
 

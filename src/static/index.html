@@ -53,6 +53,9 @@
     text-align: center; color: var(--muted); cursor: pointer; transition: .15s;
   }
   .drop.over { border-color: var(--accent); background: var(--card2); }
+  /* Живая ручка принимает только микрофон — зона файла явно неактивна */
+  .drop.nofile { cursor: default; border-style: solid; }
+  .drop.nofile #dropText { opacity: .45; }
   /* Разделитель «или» внутри рамки: два равноправных способа дать аудио */
   .drop-or { display: flex; align-items: center; gap: 12px; margin: 14px 0 12px; color: var(--muted); font-size: 12px; }
   .drop-or::before, .drop-or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
@@ -164,9 +167,9 @@
        отдельные каналы, которые к контракту транскрибации не относятся. -->
   <div class="card">
 
-    <!-- 1. Общее: действует в любом режиме и на любом контракте -->
+    <!-- 1. Общее: применяется к любой ручке -->
     <div class="grp">
-      <div class="grp-t">Общее <span>— действует в любом режиме</span></div>
+      <div class="grp-t">Общее <span>— применяется к любой ручке</span></div>
       <div class="row">
         <label class="opt">Модель распознавания
           <select id="model"></select>
@@ -174,34 +177,38 @@
         <label class="opt" id="langWrap" hidden>Язык
           <select id="lang"><option value="ru" selected>ru</option><option value="en">en</option></select>
         </label>
-        <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается. Действует на обоих контрактах и при стриминге; в живой диктовке включён всегда."><input type="checkbox" id="vadOn"> VAD-чанкование</label>
+        <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается. В живой диктовке включён всегда."><input type="checkbox" id="vadOn"> VAD-чанкование</label>
       </div>
     </div>
 
-    <!-- 2. Контракт транскрибации и его собственные опции -->
+    <!-- 2. Ручка распознавания: выбирается ОДНА, у каждой свои опции.
+         Раньше живая диктовка пряталась галочкой «стриминг» рядом с SSE,
+         из-за чего одна галочка означала то параметр ручки OpenAI, то
+         совершенно другую ручку. Теперь это три равноправных варианта. -->
     <div class="grp">
-      <div class="grp-t">Контракт транскрибации <span>— определяет форму запроса и ответа</span></div>
+      <div class="grp-t">Ручка распознавания <span>— выбирается одна</span></div>
       <div class="row">
-        <label class="opt">Контракт
+        <label class="opt">Эндпоинт
           <select id="endpoint">
-            <option value="openai" selected>OpenAI · /v1/audio/transcriptions</option>
-            <option value="native">Нативный · /stt/asr</option>
+            <option value="openai" selected>OpenAI · POST /v1/audio/transcriptions</option>
+            <option value="native">Нативная · POST /stt/asr</option>
+            <option value="live">Живая диктовка · WS /stt/stream</option>
           </select>
         </label>
-        <label class="opt">Формат ответа
+        <label class="opt" id="fmtWrap">Формат ответа
           <select id="format"></select>
         </label>
-        <label class="toggle"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
+        <label class="toggle" id="wordsWrap"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
+        <label class="toggle" id="streamWrap" title="Параметр stream=true ручки OpenAI: аудио уходит одним запросом целиком, текст возвращается SSE-дельтами по мере распознавания чанков. Это стриминг ОТВЕТА — вход не стримится."><input type="checkbox" id="streamOn"> Стриминг ответа (SSE)</label>
       </div>
       <div class="grp-d" id="epDesc"></div>
     </div>
 
-    <!-- 3. Отдельные каналы: свои запросы/соединения, а не часть транскрибации -->
+    <!-- 3. Дополнительная ручка: свой запрос параллельно основному -->
     <div class="grp">
-      <div class="grp-t">Отдельно от транскрибации <span>— свои запросы, не часть ответа выше</span></div>
+      <div class="grp-t">Дополнительно <span>— отдельный запрос параллельно основному</span></div>
       <div class="row">
-        <label class="toggle" id="emoWrap" hidden title="Отдельный запрос POST /stt/emotion к отдельной модели GigaAMEmo. В OpenAI-контракте эмоций нет вовсе, поэтому это наше расширение. Работает во всех режимах и от выбора модели распознавания не зависит."><input type="checkbox" id="emoOn"> Эмоции</label>
-        <label class="toggle" id="streamWrap" title="Текст приходит по мере готовности, а не целиком в конце. Загруженный файл — SSE-дельты (OpenAI transcript.text.delta, только OpenAI-контракт). Микрофон — WebSocket /stt/stream, наше расширение: аудио уходит по мере речи, фразы возвращаются, не дожидаясь «Стоп»."><input type="checkbox" id="streamOn"> Стриминг ответа фразами</label>
+        <label class="toggle" id="emoWrap" hidden title="POST /stt/emotion — отдельная ручка и отдельная модель GigaAMEmo. В OpenAI-контракте эмоций нет вовсе. Идёт параллельно с распознаванием, работает с любой ручкой и от выбора модели распознавания не зависит."><input type="checkbox" id="emoOn"> Эмоции · POST /stt/emotion</label>
       </div>
     </div>
     <div class="hint" id="fmtHint"></div>
@@ -213,8 +220,10 @@
        Кнопка живёт внутри рамки: нажать можно туда или сюда. -->
   <div class="card">
     <div class="drop" id="drop">
-      Перетащите аудиофайл или <b>нажмите, чтобы выбрать</b><br>
-      <span style="font-size:12px">wav · mp3 · flac · ogg · opus · m4a · webm · wma …</span>
+      <div id="dropText">
+        Перетащите аудиофайл или <b>нажмите, чтобы выбрать</b><br>
+        <span style="font-size:12px">wav · mp3 · flac · ogg · opus · m4a · webm · wma …</span>
+      </div>
       <div class="drop-or"><span>или</span></div>
       <div class="drop-rec">
         <button id="recBtn" class="primary">🎙 Начать запись</button>
@@ -238,7 +247,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'one-input-1';
+const UI_BUILD = 'endpoints-1';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -332,6 +341,7 @@ const FORMATS = {
     ['srt', 'srt — субтитры'],
     ['vtt', 'vtt — субтитры'],
   ],
+  live: [],
   native: [
     ['json', 'json — сегменты, метрики'],
     ['text', 'text'],
@@ -351,12 +361,14 @@ function fillModels() {
 function fillFormats() {
   const ep = $('endpoint').value;
   $('format').innerHTML = FORMATS[ep].map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
-  $('langWrap').hidden = ep !== 'native';
-  // Тумблер стриминга виден всегда: живая диктовка идёт по нашему
-  // /stt/stream и от контракта транскрибации не зависит. На нативном
-  // контракте он не действует только для ЗАГРУЖЕННОГО файла — об этом
-  // говорит сводка ниже, прятать элемент незачем.
-  $('streamWrap').hidden = false;
+  // Опции показываются только у той ручки, которой они принадлежат:
+  //   формат и слова — у обеих файловых, но не у живой (там всегда дельты);
+  //   SSE — параметр исключительно ручки OpenAI;
+  //   язык — параметр нативной и живой.
+  $('fmtWrap').hidden = ep === 'live';
+  $('wordsWrap').hidden = ep === 'live';
+  $('streamWrap').hidden = ep !== 'openai';
+  $('langWrap').hidden = ep === 'openai';
   updateHint();
 }
 $('endpoint').addEventListener('change', fillFormats);
@@ -375,59 +387,63 @@ $('wordTs').addEventListener('change', updateHint);
 //    во всех режимах и от выбора модели распознавания не зависят.
 function updateHint() {
   const ep = $('endpoint').value, fmt = $('format').value;
-  const streaming = $('streamOn').checked && !$('streamWrap').hidden;
-  // Формат и слова отменяет только SSE — а он есть исключительно на
-  // OpenAI-контракте. На нативном тумблер влияет лишь на микрофон
-  // (живая диктовка идёт по нашему /stt/stream), а загруженный файл
-  // вернётся обычным ответом в выбранном формате.
-  const sse = streaming && ep === 'openai';
+  const sse = ep === 'openai' && $('streamOn').checked;
   const wordsFmt = ep === 'openai' ? 'verbose_json' : 'json';
-  const wordsOk = !sse && fmt === wordsFmt;
+  const wordsOk = ep !== 'live' && !sse && fmt === wordsFmt;
 
   const gate = (id, ok, why) => {
     const el = $(id), label = el.closest('label');
     el.disabled = !ok;
     if (label) { label.classList.toggle('off', !ok); label.title = ok ? '' : why; }
   };
-
-  gate('format', !sse, 'При стриминге ответ всегда приходит дельтами — формат не применяется');
+  gate('format', !sse, 'При stream=true ответ приходит дельтами — формат не применяется');
   gate('wordTs', wordsOk, sse
-    ? 'В стриминге пословных таймстемпов нет: дельты содержат только текст'
+    ? 'В SSE-дельтах пословных таймстемпов нет'
     : `Слова возвращаются только в формате ${wordsFmt}`);
 
-  // Что за контракт выбран и чем отличается
-  $('epDesc').innerHTML = ep === 'openai'
-    ? 'Совместим с OpenAI Whisper API: поле файла <code>file</code>, форматы '
-      + '<code>json</code> <code>text</code> <code>verbose_json</code> <code>srt</code> <code>vtt</code>, '
-      + 'слова только в <code>verbose_json</code>. Работает с OpenAI SDK без переделки. '
-      + 'Стриминг ответа по SSE есть только здесь.'
-    : 'Наш собственный контракт: поле файла <code>audio_file</code>, форматы '
-      + '<code>json</code> <code>text</code> <code>srt</code> <code>vtt</code> <code>tsv</code>, '
-      + 'слова только в <code>json</code>, расширенный ответ (сегменты, метрики). '
-      + '<b>Стриминг ответа по SSE не поддерживает</b> — параметр молча игнорируется.';
-
   let hint = '';
-  if (!sse && $('wordTs').checked && fmt !== wordsFmt)
-    hint = `Слова в этом контракте возвращаются только в формате ${wordsFmt}.`;
+  if (ep !== 'live' && !sse && $('wordTs').checked && fmt !== wordsFmt)
+    hint = `Слова в этой ручке возвращаются только в формате ${wordsFmt}.`;
   $('fmtHint').textContent = hint;
 
-  // Явная сводка: что действует, а что нет и почему
+  const DESC = {
+    openai: 'Совместима с OpenAI Whisper API: поле файла <code>file</code>, форматы '
+      + '<code>json</code> <code>text</code> <code>verbose_json</code> <code>srt</code> <code>vtt</code>, '
+      + 'слова только в <code>verbose_json</code>. Работает с OpenAI SDK без переделки. '
+      + 'Единственная ручка с параметром <code>stream=true</code> (SSE).',
+    native: 'Наша ручка: поле файла <code>audio_file</code>, форматы '
+      + '<code>json</code> <code>text</code> <code>srt</code> <code>vtt</code> <code>tsv</code>, '
+      + 'слова только в <code>json</code>, расширенный ответ — сегменты и метрики. '
+      + 'Параметр <code>stream</code> не поддерживает: молча вернёт обычный ответ.',
+    live: 'Наша ручка поверх WebSocket, <b>не</b> протокол OpenAI Realtime. Аудио уходит '
+      + 'сырым PCM <b>по мере речи</b>, сервер сам режет поток на фразы своим VAD и '
+      + 'присылает текст каждой, не дожидаясь конца. Формата ответа и слов здесь нет — '
+      + 'только дельты. <b>Работает только с микрофона</b>: файл сюда подать нельзя.',
+  };
+  $('epDesc').innerHTML = DESC[ep];
+
+  // Зона файла бессмысленна у живой ручки — она принимает только микрофон
+  $('drop').classList.toggle('nofile', ep === 'live');
+  $('dropText').innerHTML = ep === 'live'
+    ? '<span style="font-size:12.5px">Живая диктовка принимает только микрофон.<br>'
+      + 'Чтобы распознать файл — выберите ручку OpenAI или нативную.</span>'
+    : 'Перетащите аудиофайл или <b>нажмите, чтобы выбрать</b><br>'
+      + '<span style="font-size:12px">wav · mp3 · flac · ogg · opus · m4a · webm · wma …</span>';
+
   const on = t => `<b>${t}</b>`, off = t => `<span class="no">${t}</span>`;
   const rows = [];
-  if (!streaming) {
-    rows.push(`Файл и микрофон: ${on('обычный запрос')} — аудио уходит целиком, ответ приходит целиком.`);
-  } else if (ep === 'openai') {
-    rows.push(`Файл: ${on('SSE-дельты')} по мере распознавания чанков · Микрофон: ${on('живая диктовка')} по WebSocket /stt/stream.`);
+  if (ep === 'live') {
+    rows.push(`Вход: ${on('стримится')} — аудио уходит по мере речи · Выход: ${on('фразы')} во время разговора.`);
+    rows.push(`Формат ответа: ${off('нет')} · Слова: ${off('нет')} · VAD: ${on('всегда включён')}`);
   } else {
-    rows.push(`Файл: ${off('обычный ответ')} — нативный контракт SSE не умеет, параметр игнорируется · ` +
-              `Микрофон: ${on('живая диктовка')} по WebSocket /stt/stream (наше расширение, от контракта не зависит).`);
+    rows.push(`Вход: ${off('целиком')} — файл или запись уходят одним запросом · ` +
+      `Выход: ${sse ? on('SSE-дельты по мере распознавания') : off('целиком в конце')}.`);
+    rows.push(`Формат ответа: ${sse ? off('не применяется, всегда дельты') : on(fmt)} · ` +
+      `Слова: ${wordsOk ? on('да') : off(sse ? 'нет в SSE' : `только ${wordsFmt}`)} · ` +
+      `VAD: ${on('действует')}`);
   }
-  rows.push(`Формат ответа: ${sse ? off('не применяется, всегда дельты') : on(fmt)} · ` +
-            `Слова: ${wordsOk ? on('да') : off(sse ? 'нет в стриминге' : `только ${wordsFmt}`)}`);
-  rows.push(`VAD-чанкование: ${on('действует')}` +
-            (sse ? ' (и в SSE тоже)' : '') + ', в живой диктовке включён всегда · ' +
-            `Эмоции: ${on('во всех режимах')}, отдельным запросом к своей модели`);
-  rows.push('Модель распознавания действует везде и на эмоции не влияет.');
+  rows.push(`Эмоции: ${on('доступны с любой ручкой')}, отдельным запросом · ` +
+    `Модель распознавания действует везде и на эмоции не влияет.`);
   $('applies').innerHTML = rows.join('<br>');
 }
 $('streamOn').addEventListener('change', updateHint);
@@ -438,7 +454,7 @@ if (!navigator.mediaDevices?.getUserMedia) { $('recBtn').disabled = true; $('mic
 // Одна кнопка на оба режима: транспорт — деталь реализации, пользователю
 // консоли важно только, приходит ли текст по мере готовности. Это и решает
 // тумблер «Стриминг ответа фразами».
-const liveMode = () => $('streamOn').checked && !$('streamWrap').hidden;
+const liveMode = () => $('endpoint').value === 'live';
 $('recBtn').addEventListener('click', ev => {
   ev.stopPropagation();   // кнопка внутри .drop — иначе откроется и файловый диалог
   if (rec) return stopRecording();
@@ -670,14 +686,17 @@ function encodeWav(pcm, sampleRate) {
 }
 
 /* ============================ файл / dnd ============================= */
-$('drop').addEventListener('click', () => $('file').click());
+$('drop').addEventListener('click', () => {
+  if (liveMode()) return;   // живая ручка принимает только микрофон
+  $('file').click();
+});
 $('file').addEventListener('change', () => {
   if ($('file').files[0]) transcribe($('file').files[0], $('file').files[0].name);
   $('file').value = '';
 });
 ['dragover', 'dragenter'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
-$('drop').addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) transcribe(f, f.name); });
+$('drop').addEventListener('drop', e => { if (liveMode()) return; const f = e.dataTransfer.files[0]; if (f) transcribe(f, f.name); });
 
 /* ============================ transcribe ============================= */
 async function transcribe(blob, filename) {
