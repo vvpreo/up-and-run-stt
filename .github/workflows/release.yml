@@ -176,15 +176,6 @@ jobs:
             $SRCS
           docker buildx imagetools inspect "${{ env.IMAGE }}:$V"
 
-      # README на Docker Hub — та же страница, что и в репозитории
-      - name: Sync Docker Hub description
-        uses: peter-evans/dockerhub-description@v4
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ env.IMAGE }}
-          short-description: "Local Russian speech-to-text (GigaAM, ONNX, CPU) with an OpenAI-compatible API"
-
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -194,6 +185,24 @@ jobs:
           # предыдущего тега ещё нет.
           V="${{ needs.version.outputs.version }}"
           gh release create "v$V" --title "v$V" --generate-notes
+
+      # README на Docker Hub — та же страница, что и в репозитории.
+      #
+      # Идёт ПОСЛЕДНИМ и не валит релиз: к этому моменту образ уже
+      # опубликован, и косметический синк описания не должен ронять джоб.
+      # В релизе v2.0.1 он это и сделал — Docker Hub ответил на PATCH
+      # Forbidden (Access Token без прав на правку метаданных репозитория),
+      # из-за чего не создался GitHub Release, хотя образ уехал нормально.
+      # Чтобы синк заработал, нужен токен со scope Read/Write/Delete;
+      # иначе описание правится на Хабе руками, оно меняется редко.
+      - name: Sync Docker Hub description
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          short-description: "Local Russian speech-to-text (GigaAM, ONNX, CPU) with an OpenAI-compatible API"
 
   # ------------------------------------------------------------ edge-образ
   # Не относится к релизу: отдельный воркфлоу держал бы дубль сборки, а так

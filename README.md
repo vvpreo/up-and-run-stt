@@ -16,21 +16,79 @@ Transformers variants were removed as unnecessary.
 
 ## Quick start
 
+Nothing to clone and nothing to build — the image is on Docker Hub as
+[`vvpreo/up-and-run-stt`](https://hub.docker.com/r/vvpreo/up-and-run-stt), for
+both `linux/amd64` and `linux/arm64`:
+
 ```bash
-docker compose up -d          # build (first time) + run
-docker compose logs -f        # the first start downloads model weights (~420 MB)
+docker run -d --name up-and-run-stt \
+  -p 9007:9007 \
+  -v gigaam-models:/app/data \
+  -e AUTH_TOKEN=change-me \
+  -e GIGAAM_MODELS=v3_e2e_ctc \
+  -e DEFAULT_LANGUAGE=ru \
+  -e MODEL_IDLE_TIMEOUT=0 \
+  -e VAD_CHUNKING=true \
+  -e MAX_UPLOAD_MB=200 \
+  -e MAX_PENDING_REQUESTS=8 \
+  -e LOG_LEVEL=INFO \
+  --restart unless-stopped \
+  vvpreo/up-and-run-stt:latest
 ```
 
-All configuration lives in the `environment` block of `docker-compose.yml`
-(each variable is commented there). There is no separate `.env`.
+What the flags do, since only the first three are strictly required:
 
-Or without compose — from a prebuilt image (build with `./build.sh [tag] [--push]`):
+| Flag | Why it matters |
+|---|---|
+| `-v gigaam-models:/app/data` | **Do not skip this.** Model weights are not baked into the image — they are downloaded on first start. Without a volume they land inside the container and are re-downloaded from scratch every time it is recreated. |
+| `-e AUTH_TOKEN=change-me` | Enables Bearer authorization on the transcription endpoints. Leave it unset and **the API is open to anyone who can reach the port**. |
+| `-e GIGAAM_MODELS=v3_e2e_ctc` | Which models the instance serves, comma-separated; the first is the default. Each costs ~1.4 GB of RAM. `v3_e2e_rnnt` is more accurate and slower — see [Performance](#performance-on-this-cpu). |
+| `-e MODEL_IDLE_TIMEOUT=0` | Never unload the model, so the first request after a pause is not slow. |
+| `-e VAD_CHUNKING=true` | Split long audio at speech pauses instead of on a fixed grid, and skip silence. |
+| `-e MAX_UPLOAD_MB` / `MAX_PENDING_REQUESTS` | Upload cap (`413` above it) and concurrency cap (`429` above it). |
+
+Every value shown above is already the default, so the short form below behaves
+identically — they are spelled out to show what is worth changing. The full list
+is in [Configuration](#configuration-environment-variables).
 
 ```bash
-docker run -d --name up-and-run-stt -p 9007:9007 \
-  -v gigaam-models:/app/data \
-  -e AUTH_TOKEN=<secret> \
-  up-and-run-stt:cpu
+docker run -d -p 9007:9007 -v gigaam-models:/app/data \
+  -e AUTH_TOKEN=change-me vvpreo/up-and-run-stt:latest
+```
+
+**First start downloads the model weights** (~845 MB for one fp32 model) from
+[vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx), so it takes
+a few minutes; every later start is instant because the volume persists. Follow it
+with `docker logs -f up-and-run-stt`.
+
+Readiness check:
+
+```bash
+curl -s http://localhost:9007/health | python3 -m json.tool
+```
+
+Expected: `"model_loaded": true`, `"engine": "gigaam"`.
+
+First transcription:
+
+```bash
+curl -s http://localhost:9007/v1/audio/transcriptions \
+  -H "Authorization: Bearer change-me" \
+  -F "file=@audio.ogg" -F "response_format=text"
+```
+
+Available tags: `latest`, plus `X.Y.Z` / `X.Y` / `X` — pin as tightly as you like.
+The image is **~0.7 GB** (inference on ONNX Runtime, no PyTorch).
+
+### Running from source
+
+Only needed if you intend to modify the service. `docker-compose.yml` builds the
+image locally, and all configuration lives in its `environment` block, each
+variable commented; there is no separate `.env`.
+
+```bash
+docker compose up -d          # build (first time) + run
+docker compose logs -f
 ```
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/): `pyproject.toml`
@@ -41,22 +99,10 @@ versions. The Docker build runs `uv sync --frozen`, which fails rather than
 silently re-resolving if the lock has drifted from `pyproject.toml`. To upgrade:
 `uv lock --upgrade`, rebuild, run the tests.
 
-Defaults for every variable are baked into the image (`ENV` in the `Dockerfile`),
-so a port mapping and a volume for the weights are enough to start. The image is
-**~0.7 GB** (inference on ONNX Runtime, no PyTorch); model weights are not part of
-the image — they are downloaded on first start from
-[vvpreo/gigaam-v3-onnx](https://huggingface.co/vvpreo/gigaam-v3-onnx)
-(a mirror of the official weights; conversion script: `scripts/convert_onnx.py`).
-The PyTorch variant, used for weight conversion and quality cross-checks, is
-`Dockerfile.torch`.
-
-Readiness check:
-
-```bash
-curl -s http://localhost:9007/health | python3 -m json.tool
-```
-
-Expected: `"model_loaded": true`, `"engine": "gigaam"`.
+The weights mirror is a conversion of the official checkpoints
+(`scripts/convert_onnx.py`); override it with `GIGAAM_ONNX_BASE_URL` to serve them
+from your own host. The PyTorch variant, used for weight conversion and quality
+cross-checks, is `Dockerfile.torch`.
 
 The service listens on `0.0.0.0:9007`, so it is reachable from other hosts on the
 network and from other containers. It comes back up after a reboot
