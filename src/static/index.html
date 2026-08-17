@@ -165,15 +165,14 @@
       <label class="toggle"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
       <label class="toggle" id="emoWrap" hidden><input type="checkbox" id="emoOn"> Эмоции</label>
       <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается"><input type="checkbox" id="vadOn"> VAD-чанкование</label>
-      <label class="toggle" id="streamWrap" title="Стриминг ОТВЕТА (SSE): аудио уходит одним запросом целиком, текст приходит дельтами по мере распознавания чанков на сервере (события OpenAI transcript.text.delta). Приём запроса не стримится."><input type="checkbox" id="streamOn"> Стриминг ответа</label>
+      <label class="toggle" id="streamWrap" title="Текст приходит по мере готовности, а не целиком в конце. Загруженный файл — SSE-дельты по чанкам (OpenAI transcript.text.delta). Микрофон — WebSocket /v1/audio/stream: аудио уходит по мере речи, фразы возвращаются, не дожидаясь «Стоп»."><input type="checkbox" id="streamOn"> Стриминг ответа фразами</label>
     </div>
     <div class="hint" id="fmtHint"></div>
   </div>
 
   <div class="card">
     <div class="row">
-      <button id="recBtn" class="primary">🎙 Записать с микрофона</button>
-      <button id="liveBtn" title="WebSocket /v1/audio/stream: аудио уходит на сервер по мере речи, текст возвращается пофразно, не дожидаясь «Стоп»">📡 Живая диктовка</button>
+      <button id="recBtn" class="primary">🎙 Начать запись</button>
       <span class="timer" id="timer" hidden>0:00</span>
       <span class="status" id="recStatus"></span>
     </div>
@@ -200,7 +199,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'live-ws-1';
+const UI_BUILD = 'one-button-1';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -329,7 +328,7 @@ function updateHint() {
   if (ep === 'native' && wts && fmt !== 'json')
     hint = 'Слова в нативном контракте возвращаются только в формате json.';
   if (ep === 'openai' && $('streamOn').checked)
-    hint = 'Стриминг ответа: аудио уходит целиком, текст приходит дельтами по мере распознавания чанков (формат/слова не применяются).';
+    hint = 'Стриминг ответа фразами: файл — SSE-дельты по чанкам; микрофон — живая передача по WebSocket, фразы приходят во время речи (формат/слова не применяются).';
   $('fmtHint').textContent = hint;
 }
 $('streamOn').addEventListener('change', updateHint);
@@ -337,7 +336,15 @@ $('streamOn').addEventListener('change', updateHint);
 /* ========================== запись микрофона ========================= */
 let rec = null;
 if (!navigator.mediaDevices?.getUserMedia) { $('recBtn').disabled = true; $('micWarn').hidden = false; }
-$('recBtn').addEventListener('click', () => rec ? stopRecording() : startRecording());
+// Одна кнопка на оба режима: транспорт — деталь реализации, пользователю
+// консоли важно только, приходит ли текст по мере готовности. Это и решает
+// тумблер «Стриминг ответа фразами».
+const liveMode = () => $('streamOn').checked && !$('streamWrap').hidden;
+$('recBtn').addEventListener('click', () => {
+  if (rec) return stopRecording();
+  if (live) return stopLive();
+  return liveMode() ? startLive() : startRecording();
+});
 
 // Микрофон — обычный источник аудиофайла: пишем целиком, по «Стоп» отдаём
 // в тот же transcribe(), что и загруженный файл. Сервис умеет стримить
@@ -384,8 +391,6 @@ async function startRecording() {
    ровно то, чего не хватало прошлой версии живого режима, где детектор
    пауз жил в странице и дублировал серверный.                        */
 let live = null;
-
-$('liveBtn').addEventListener('click', () => live ? stopLive() : startLive());
 
 async function startLive() {
   if (rec) return;
@@ -486,8 +491,7 @@ async function startLive() {
     const s = Math.floor((Date.now() - live.startedAt) / 1000);
     $('timer').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }, 250);
-  $('liveBtn').textContent = '⏹ Стоп'; $('liveBtn').className = 'rec-on';
-  $('recBtn').disabled = true;
+  $('recBtn').textContent = '⏹ Стоп'; $('recBtn').className = 'rec-on';
   $('timer').hidden = false; $('timer').textContent = '0:00';
   $('recStatus').textContent = 'живая диктовка…';
 }
@@ -500,8 +504,7 @@ function stopLive(fromClose) {
   try { node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop()); ctx.close(); } catch (e) {}
   // Просим сервер добить хвост последней фразы и прислать итог
   if (!fromClose && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'close' }));
-  $('liveBtn').textContent = '📡 Живая диктовка'; $('liveBtn').className = '';
-  $('recBtn').disabled = false;
+  $('recBtn').textContent = '🎙 Начать запись'; $('recBtn').className = 'primary';
   $('timer').hidden = true; $('recStatus').textContent = '';
 }
 
@@ -511,7 +514,7 @@ function stopRecording() {
   stream.getTracks().forEach(t => t.stop()); ctx.close();
   rec = null;
 
-  $('recBtn').textContent = '🎙 Записать с микрофона'; $('recBtn').className = 'primary';
+  $('recBtn').textContent = '🎙 Начать запись'; $('recBtn').className = 'primary';
   $('timer').hidden = true; $('recStatus').textContent = '';
 
   const total = chunks.reduce((n, c) => n + c.length, 0);

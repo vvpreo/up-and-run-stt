@@ -242,16 +242,19 @@ regular JSON endpoint because OpenAPI cannot describe a WebSocket.
 
 ### Microphone in the WebUI
 
-Two buttons, one per mode:
+One button, **🎙 Начать запись**; the mode is chosen by the
+**Стриминг ответа фразами** toggle, which is the only thing a user of the console
+actually cares about — whether text arrives as it is ready or all at once at the
+end. Which transport delivers it is an implementation detail:
 
-- **🎙 Записать с микрофона** — records into a WAV file and, on **Stop**, sends it
-  through exactly the same path as a drag-and-dropped file, including the
-  "Response streaming" toggle.
-- **📡 Живая диктовка** — opens the WebSocket above and streams PCM as you speak,
-  showing each phrase as it comes back along with a live event log.
+- **toggle off** — records into a WAV file and, on Stop, sends it through exactly
+  the same path as a drag-and-dropped file.
+- **toggle on** — opens the WebSocket above and streams PCM as you speak, showing
+  each phrase as it comes back along with a live event log.
 
-In both modes the browser does no voice activity detection and no chunking of its
-own; all segmentation happens on the server.
+The same toggle keeps its meaning for uploaded files, where it turns on SSE
+response streaming. Either way the browser does no voice activity detection and no
+chunking of its own; all segmentation happens on the server.
 
 Notes (see `src/static/index.html`):
 - the microphone is requested **with auto gain and noise suppression off**
