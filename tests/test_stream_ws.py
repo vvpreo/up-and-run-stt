@@ -1,5 +1,5 @@
 """
-Потоковый приём аудио: WebSocket /v1/audio/stream.
+Потоковый приём аудио: WebSocket /stt/stream.
 
 Проверяется то, чего нет у обычных эндпоинтов: аудио уходит по мере
 «произнесения», а текст возвращается пофразно ещё до конца передачи.
@@ -24,10 +24,10 @@ TIMEOUT = 120
 
 @pytest.fixture(scope="module")
 def ws_url(base_url):
-    """base_url (http://host:port) -> ws://host:port/v1/audio/stream"""
+    """base_url (http://host:port) -> ws://host:port/stt/stream"""
     u = urlparse(base_url)
     scheme = "wss" if u.scheme == "https" else "ws"
-    return f"{scheme}://{u.netloc}/v1/audio/stream"
+    return f"{scheme}://{u.netloc}/stt/stream"
 
 
 @pytest.fixture(scope="module")
@@ -177,7 +177,7 @@ def test_stream_without_token_is_refused(ws_url, token):
 
 def test_protocol_endpoint_describes_websocket(base_url, auth_headers):
     """GET на том же пути отдаёт протокол — WebSocket в OpenAPI не попадает."""
-    r = requests.get(f"{base_url}/v1/audio/stream", headers=auth_headers, timeout=30)
+    r = requests.get(f"{base_url}/stt/stream", headers=auth_headers, timeout=30)
     assert r.status_code == 200, r.text
     spec = r.json()
 

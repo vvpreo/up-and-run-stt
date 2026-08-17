@@ -5,7 +5,7 @@
 - health: Эндпоинт проверки здоровья сервиса
 - asr: Основной эндпоинт транскрипции (/asr)
 - openai: OpenAI-совместимый эндпоинт (/v1/audio/transcriptions)
-- stream: потоковый приём аудио по WebSocket (/v1/audio/stream)
+- stream: потоковый приём аудио по WebSocket (/stt/stream)
 """
 
 from src.routes.health import router as health_router

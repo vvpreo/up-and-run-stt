@@ -116,7 +116,8 @@ network and from other containers. It comes back up after a reboot
 |---|---|---|
 | `POST` | `/v1/audio/transcriptions` | OpenAI-compatible (field `file`). For the OpenAI SDK and any client that speaks the Whisper API. |
 | `POST` | `/stt/asr` | Native (field `audio_file`), richer response: segments, words, metrics. |
-| `POST` | `/stt/emotion` | Speech emotion (GigaAMEmo): angry / sad / neutral / positive. |
+| `POST` | `/stt/emotion` | Speech emotion (GigaAMEmo): angry / sad / neutral / positive. Not part of the OpenAI contract, which has no notion of emotion — hence `/stt/`. |
+| `WS` | `/stt/stream` | Live audio input: push PCM while speaking, get phrases back. A native protocol, not OpenAI's Realtime API. `GET` the same path for the spec. |
 | `GET` | `/v1/models`, `/v1/models/{id}` | Models available on this instance (OpenAI format, for GUI clients). |
 | `POST` | `/v1/audio/translations` | Not supported (the model is Russian-only) — returns a proper 400. |
 | `GET`  | `/health` | Status, models, queue, feature flags, memory. |
@@ -159,14 +160,16 @@ audio, as well as `confidence` / `chars_per_second` (diagnostics).
 
 > **Read this before designing a client.** What is streamed here is the
 > **response**, not the request. The audio still goes up as one complete HTTP
-> request; only the text comes back incrementally. There is no streaming *input*
-> — no WebSocket, no chunked request body, no way to feed a live microphone
-> into an open connection.
+> request; only the text comes back incrementally. To stream the *input* — to
+> feed a live microphone into an open connection — use the WebSocket at
+> [`/stt/stream`](#live-audio-input--websocket-sttstream) instead.
 
 This mirrors OpenAI exactly: their `/v1/audio/transcriptions` with `stream=true`
-also streams the response for an already-uploaded file. The input pipe lives in a
-different product — the Realtime API over WebSocket — which this service does not
-implement.
+also streams the response for an already-uploaded file. OpenAI's own streaming
+*input* lives in a separate product, the Realtime API over WebSocket, whose
+protocol this service does **not** implement — `/stt/stream` is a native
+extension with its own protocol, which is why it sits under `/stt/` rather than
+`/v1/`.
 
 How it works: `-F "stream=true"` → `text/event-stream` with
 `transcript.text.delta` events (emitted as the server finishes each chunk) and a
@@ -189,14 +192,14 @@ that wants text *while* the user is still speaking has to cut the audio itself a
 send each piece as a separate request, which is an application-level workaround,
 not a feature of this API.
 
-### Live audio input — `WebSocket /v1/audio/stream`
+### Live audio input — `WebSocket /stt/stream`
 
 This is the other half: here the **request** streams. You push raw PCM while the
 person is still speaking and get text back phrase by phrase, without waiting for
 the recording to end.
 
 ```
-ws://localhost:9007/v1/audio/stream?token=<AUTH_TOKEN>&language=ru
+ws://localhost:9007/stt/stream?token=<AUTH_TOKEN>&language=ru
 ```
 
 The client is deliberately dumb: it sends frames and decides nothing. Where a
@@ -237,7 +240,7 @@ event with `retry: true`, then close code **1013** — so a client can tell "not
 allowed" from "come back later".
 
 Full protocol, including a runnable Python client, is at
-**`GET /v1/audio/stream`** and in Swagger under the *Streaming* tag. It is a
+**`GET /stt/stream`** and in Swagger under the *Streaming* tag. It is a
 regular JSON endpoint because OpenAPI cannot describe a WebSocket.
 
 ### Microphone in the WebUI

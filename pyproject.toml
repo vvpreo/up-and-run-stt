@@ -28,7 +28,7 @@ dependencies = [
     # HTTP-сервис
     "fastapi>=0.141.1",
     "uvicorn>=0.52.3",
-    # Реализация WebSocket для uvicorn: без неё /v1/audio/stream не поднимется.
+    # Реализация WebSocket для uvicorn: без неё /stt/stream не поднимется.
     # Ставится отдельно, а не через uvicorn[standard], чтобы не тащить в образ
     # uvloop/httptools/watchfiles, которые сервису не нужны.
     "websockets>=15.0",
@@ -44,7 +44,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "requests>=2.32",
-    # Клиент для тестов WebSocket-эндпоинта /v1/audio/stream
+    # Клиент для тестов WebSocket-эндпоинта /stt/stream
     "websockets>=15.0",
 ]
 

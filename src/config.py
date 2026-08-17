@@ -53,7 +53,7 @@ GIGAAM_MAX_SHORT_AUDIO_SEC = float(os.getenv("GIGAAM_MAX_SHORT_AUDIO_SEC", "25.0
 # per-request (native: ?vad=, OpenAI: chunking_strategy=auto|none).
 VAD_CHUNKING = os.getenv("VAD_CHUNKING", "true").lower() == "true"
 
-# --- Потоковый приём аудио (WebSocket /v1/audio/stream) --------------------
+# --- Потоковый приём аудио (WebSocket /stt/stream) --------------------
 # Клиент льёт PCM по мере речи, сервер сам режет поток на фразы по паузам.
 # Модель офлайновая, поэтому «стриминг запроса» = поток на входе + пофразный
 # результат на выходе; внутри фразы промежуточных гипотез нет.

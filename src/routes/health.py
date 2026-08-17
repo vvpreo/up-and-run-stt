@@ -118,7 +118,7 @@ async def health_check() -> dict:
         "docs_enabled": ENABLE_DOCS,
         # VAD-чанкование: дефолт сервера (переопределяется per-request)
         "vad_chunking": VAD_CHUNKING and silero_vad.available(),
-        # Живые WebSocket-сессии потокового приёма аудио (/v1/audio/stream).
+        # Живые WebSocket-сессии потокового приёма аудио (/stt/stream).
         # Считается отдельно от pending_requests: открытая сессия почти
         # ничего не стоит, дорог только инференс на закрытии фразы.
         "stream_sessions": active_stream_sessions(),

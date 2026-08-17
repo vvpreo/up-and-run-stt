@@ -1,5 +1,5 @@
 """
-Потоковый приём аудио: WebSocket /v1/audio/stream.
+Потоковый приём аудио: WebSocket /stt/stream.
 
 В отличие от `stream=true` на /v1/audio/transcriptions (там стримится только
 ОТВЕТ, а запрос уходит целым файлом), здесь стримится вход: клиент льёт PCM
@@ -69,7 +69,7 @@ def active_sessions() -> int:
     return _sessions
 
 
-@router.websocket("/v1/audio/stream")
+@router.websocket("/stt/stream")
 async def audio_stream(
     websocket: WebSocket,
     token: Optional[str] = Query(None),
@@ -77,7 +77,7 @@ async def audio_stream(
     language: Optional[str] = Query(None),
 ) -> None:
     """
-    Живой поток аудио -> пофразный текст. Протокол описан в GET /v1/audio/stream.
+    Живой поток аудио -> пофразный текст. Протокол описан в GET /stt/stream.
     """
     # Авторизация ДО accept: неаутентифицированное соединение не должно
     # подниматься вообще. Starlette превращает close() до accept() в
@@ -286,7 +286,7 @@ async def audio_stream(
 class StreamProtocol(BaseModel):
     """Машиночитаемое описание протокола WebSocket-эндпоинта."""
 
-    endpoint: str = Field(..., examples=["/v1/audio/stream"])
+    endpoint: str = Field(..., examples=["/stt/stream"])
     transport: str = Field(..., examples=["websocket"])
     audio_format: dict
     query_params: dict
@@ -297,12 +297,12 @@ class StreamProtocol(BaseModel):
 
 
 @router.get(
-    "/v1/audio/stream",
+    "/stt/stream",
     response_model=StreamProtocol,
     tags=["Streaming"],
     summary="Protocol description for the live audio WebSocket",
     description="""
-Describes the **WebSocket** endpoint at the same path, `ws(s)://<host>/v1/audio/stream`,
+Describes the **WebSocket** endpoint at the same path, `ws(s)://<host>/stt/stream`,
 which OpenAPI cannot represent directly. Fetch it to discover the protocol at
 runtime, or just read it here.
 
@@ -332,7 +332,7 @@ Typical latency from the end of a phrase to its text is about a second:
 import asyncio, json, websockets, soundfile as sf, numpy as np
 
 async def main():
-    url = "ws://localhost:9007/v1/audio/stream?token=YOUR_TOKEN&language=ru"
+    url = "ws://localhost:9007/stt/stream?token=YOUR_TOKEN&language=ru"
     async with websockets.connect(url) as ws:
         print(await ws.recv())                      # session.created
 
@@ -389,7 +389,7 @@ concurrent file transcriptions (`MAX_PENDING_REQUESTS`).
 async def stream_protocol() -> StreamProtocol:
     """Отдаёт протокол WebSocket-эндпоинта машиночитаемо."""
     return StreamProtocol(
-        endpoint="/v1/audio/stream",
+        endpoint="/stt/stream",
         transport="websocket",
         audio_format={
             "encoding": "pcm_s16le",
