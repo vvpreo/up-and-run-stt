@@ -254,15 +254,18 @@ different endpoints rather than variations of one:
 | Распознавание целиком | `POST /v1/audio/transcriptions` or `POST /stt/asr` | contract, response format, word timestamps, VAD chunking, `stream=true` (OpenAI only) |
 | Распознавание эмоций | `POST /stt/emotion` | none — no text is produced |
 
-Model and language live inside the tabs where they apply — the emotions tab has
-neither, since emotions come from a separate model that receives neither. It is one
-block moved between tabs rather than duplicated, so switching tabs does not reset
-it.
+The model selector lives inside the tabs where it applies — the emotions tab does
+not have it, since emotions come from a separate model that never receives it. It
+is one block moved between tabs rather than duplicated, so switching tabs does not
+reset the selection.
 
-The language selector is labelled "Язык в ответе" on purpose: the model is
-Russian-only, so the parameter does not change recognition at all — `ru` and `en`
-return byte-identical text, verified — it only sets the `language` field in the
-response, which matters to clients that read it.
+There is deliberately **no language selector**. `language` is an *optional*
+parameter in the OpenAI contract, and the endpoints keep accepting it — that is
+what compatibility requires — but it cannot change recognition here: the model is
+Russian-only, and `ru` versus `en` returns byte-identical text (verified). It only
+labels the `language` field in the response. Offering a control that cannot change
+the result would have been a false affordance, so the console leaves it to
+`DEFAULT_LANGUAGE` and clients that care set it themselves.
 
 This layout exists because the previous one lied. `stream=true` is a **parameter**
 of the OpenAI endpoint that changes how the response comes back, while the live
