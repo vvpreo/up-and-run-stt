@@ -20,3 +20,4 @@ benchmark/results/
 # secrets — never commit
 .hf_token
 *.token
+benchmark/read-aloud/audio/

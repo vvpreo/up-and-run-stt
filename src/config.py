@@ -53,6 +53,34 @@ GIGAAM_MAX_SHORT_AUDIO_SEC = float(os.getenv("GIGAAM_MAX_SHORT_AUDIO_SEC", "25.0
 # per-request (native: ?vad=, OpenAI: chunking_strategy=auto|none).
 VAD_CHUNKING = os.getenv("VAD_CHUNKING", "true").lower() == "true"
 
+# --- Потоковый приём аудио (WebSocket /v1/audio/stream) --------------------
+# Клиент льёт PCM по мере речи, сервер сам режет поток на фразы по паузам.
+# Модель офлайновая, поэтому «стриминг запроса» = поток на входе + пофразный
+# результат на выходе; внутри фразы промежуточных гипотез нет.
+
+# Пауза, закрывающая фразу. Меньше — отзывчивее, но рвёт речь на паузах
+# внутри предложений; больше — связнее текст, но выше задержка.
+STREAM_SILENCE_MS = int(os.getenv("STREAM_SILENCE_MS", "600"))
+
+# Предохранитель от бесконечного буфера: если человек говорит без пауз или
+# VAD не видит тишины (шум), фраза всё равно принудительно закрывается.
+STREAM_MAX_PHRASE_SEC = float(os.getenv("STREAM_MAX_PHRASE_SEC", "20"))
+
+# Короче этого фразы не отправляются в модель: щелчки, кашель, стук.
+STREAM_MIN_PHRASE_SEC = float(os.getenv("STREAM_MIN_PHRASE_SEC", "0.35"))
+
+# Сколько живых сессий обслуживать одновременно. Это НЕ то же самое, что
+# MAX_PENDING_REQUESTS: открытая сессия почти ничего не стоит (~0.5% ядра на
+# VAD + ~2 МБ буферов), дорог только инференс на закрытии фразы. Поэтому
+# лимит соединений отдельный и на порядок выше лимита инференсов.
+STREAM_MAX_SESSIONS = int(os.getenv("STREAM_MAX_SESSIONS", "32"))
+
+# Потолок необработанных фраз на сессию. Копится, если клиент шлёт быстрее
+# реального времени (проигрывание файла в сокет) или инференс не успевает.
+# Сверх лимита самые старые фразы отбрасываются с событием stream.overflow —
+# лучше потерять кусок, чем расти по памяти без предела.
+STREAM_MAX_QUEUED_PHRASES = int(os.getenv("STREAM_MAX_QUEUED_PHRASES", "4"))
+
 # Chunk size (seconds) used when splitting long audio into fixed-size chunks for repeated
 # calls to `model.transcribe()`. Configure via env vars:
 #   - GIGAAM_CHUNK_SEC: preferred chunk size in seconds (default: 30)

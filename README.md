@@ -189,13 +189,69 @@ that wants text *while* the user is still speaking has to cut the audio itself a
 send each piece as a separate request, which is an application-level workaround,
 not a feature of this API.
 
+### Live audio input — `WebSocket /v1/audio/stream`
+
+This is the other half: here the **request** streams. You push raw PCM while the
+person is still speaking and get text back phrase by phrase, without waiting for
+the recording to end.
+
+```
+ws://localhost:9007/v1/audio/stream?token=<AUTH_TOKEN>&language=ru
+```
+
+The client is deliberately dumb: it sends frames and decides nothing. Where a
+phrase ends, what counts as silence and what to discard is decided on the server
+by silero-vad — the same neural VAD that chunks uploaded files, so there is one
+implementation of that logic rather than two.
+
+Send raw **PCM s16le, 16 kHz, mono** as binary frames (any size; 50–200 ms is
+sensible). Compressed input is not accepted on purpose: it would need a decoder
+process per connection, while raw PCM costs 256 kbit/s and no CPU. Control
+messages are JSON: `{"type":"commit"}` closes the current phrase immediately,
+`{"type":"close"}` ends the session.
+
+The server replies with JSON events: `session.created`, `speech.started` /
+`speech.stopped`, `transcript.text.delta` for each finished phrase, a final
+`transcript.text.done`, and `stream.overflow` if inference falls behind and the
+oldest queued phrase had to be dropped.
+
+**Results arrive per phrase, never word by word.** GigaAM is an offline model — it
+needs a complete segment — so there are no partial hypotheses inside a phrase.
+Latency from the end of a phrase to its text is about a second: ~600 ms to confirm
+the pause plus inference (~0.3 s for a 5-second phrase).
+
+Measured cost on the reference CPU: an open session is **~0.5% of a core** for
+continuous voice detection plus ~2 MB of buffers, and inference runs only when a
+phrase closes — about **5% of a core** for one continuously speaking user. That is
+why the session limit (`STREAM_MAX_SESSIONS`, default 32) is much higher than the
+limit on concurrent file transcriptions (`MAX_PENDING_REQUESTS`, default 8): an
+open stream is nearly free, only phrase completions cost anything.
+
+Silence is trimmed before inference. On a 137-second sample that cut the audio fed
+to the model from 137 s to 69 s and, unexpectedly, **improved** accuracy — long
+stretches of silence make the model produce filler.
+
+A bad token fails the handshake with **HTTP 403** and no socket is opened. Hitting
+the session limit is different on purpose: the socket opens, you get an `error`
+event with `retry: true`, then close code **1013** — so a client can tell "not
+allowed" from "come back later".
+
+Full protocol, including a runnable Python client, is at
+**`GET /v1/audio/stream`** and in Swagger under the *Streaming* tag. It is a
+regular JSON endpoint because OpenAPI cannot describe a WebSocket.
+
 ### Microphone in the WebUI
 
-The console (`/`) records from the microphone into a WAV file and, on **Stop**,
-sends it through exactly the same path as a drag-and-dropped file — including the
-"Response streaming" toggle, which then shows the text arriving in deltas. The
-browser does no voice activity detection and no chunking of its own; all
-segmentation happens on the server, where the silero-vad chunker lives.
+Two buttons, one per mode:
+
+- **🎙 Записать с микрофона** — records into a WAV file and, on **Stop**, sends it
+  through exactly the same path as a drag-and-dropped file, including the
+  "Response streaming" toggle.
+- **📡 Живая диктовка** — opens the WebSocket above and streams PCM as you speak,
+  showing each phrase as it comes back along with a live event log.
+
+In both modes the browser does no voice activity detection and no chunking of its
+own; all segmentation happens on the server.
 
 Notes (see `src/static/index.html`):
 - the microphone is requested **with auto gain and noise suppression off**

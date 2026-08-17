@@ -30,12 +30,51 @@ VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.5"))
 _FRAME = 512    # сэмплов на окно (32 мс при 16 кГц)
 _CONTEXT = 64   # v5 требует 64 сэмпла контекста перед окном (вход = 576)
 
+# Размер окна нужен наружу: потоковый сегментатор нарезает входной поток
+# ровно такими кусками, иначе VadStream.feed получит кадр не той длины.
+FRAME_SAMPLES = _FRAME
+
+
+class VadStream:
+    """
+    Потоковая сессия VAD: кадры скармливаются по одному, состояние живёт здесь.
+
+    Silero v5 рекуррентна — вероятность речи для окна зависит от всего, что
+    было до него. В пакетном режиме состояние жило локальной переменной внутри
+    цикла; для живого микрофона кадры приходят по мере поступления, поэтому
+    состояние (`_state`) и хвост предыдущего окна (`_context`) вынесены в
+    объект. Один экземпляр = одно соединение; экземпляры независимы.
+
+    ONNX-сессия при этом ОБЩАЯ и не под локом: InferenceSession.run
+    потокобезопасен, а состояние у каждого потока своё. Лок здесь
+    сериализовал бы весь VAD между соединениями на ровном месте.
+    """
+
+    __slots__ = ("_session", "_state", "_context", "_sr")
+
+    def __init__(self, session) -> None:
+        self._session = session
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros(_CONTEXT, dtype=np.float32)
+        self._sr = np.array(SAMPLE_RATE, dtype=np.int64)
+
+    def feed(self, frame: np.ndarray) -> float:
+        """Вероятность речи для очередного окна ровно из _FRAME сэмплов."""
+        frame = np.asarray(frame, dtype=np.float32)
+        inp = np.concatenate([self._context, frame])[None]  # (1, 576)
+        out, self._state = self._session.run(
+            None, {"input": inp, "state": self._state, "sr": self._sr}
+        )
+        self._context = frame[-_CONTEXT:]
+        return float(out[0, 0])
+
 
 class SileroVad:
     """Ленивая обёртка silero_vad.onnx: audio -> вероятности речи по окнам."""
 
     def __init__(self) -> None:
         self.session = None
+        # Только для ленивой инициализации сессии; сам инференс не лочится.
         self._lock = Lock()
 
     def available(self) -> bool:
@@ -55,6 +94,17 @@ class SileroVad:
             )
             logger.info(f"Silero VAD loaded from {VAD_MODEL_PATH}")
 
+    def stream(self) -> "VadStream":
+        """
+        Новая независимая потоковая сессия поверх этой же ONNX-сессии.
+
+        Для живого микрофона: кадры приходят по мере поступления, а не
+        одним массивом, поэтому рекуррентное состояние живёт в объекте
+        сессии, а не в локальной переменной (см. VadStream).
+        """
+        self._ensure_loaded()
+        return VadStream(self.session)
+
     def speech_probs(self, audio: np.ndarray) -> np.ndarray:
         """Вероятность речи для каждого 512-сэмплового окна (float32)."""
         self._ensure_loaded()
@@ -63,19 +113,10 @@ class SileroVad:
             return np.zeros(0, dtype=np.float32)
 
         probs = np.empty(n_frames, dtype=np.float32)
-        state = np.zeros((2, 1, 128), dtype=np.float32)
-        context = np.zeros(_CONTEXT, dtype=np.float32)
-        sr = np.array(SAMPLE_RATE, dtype=np.int64)
+        stream = VadStream(self.session)
         audio = np.asarray(audio, dtype=np.float32)
-        with self._lock:
-            for i in range(n_frames):
-                frame = audio[i * _FRAME : (i + 1) * _FRAME]
-                inp = np.concatenate([context, frame])[None]  # (1, 576)
-                out, state = self.session.run(
-                    None, {"input": inp, "state": state, "sr": sr}
-                )
-                probs[i] = out[0, 0]
-                context = frame[-_CONTEXT:]
+        for i in range(n_frames):
+            probs[i] = stream.feed(audio[i * _FRAME : (i + 1) * _FRAME])
         return probs
 
     def speech_regions(

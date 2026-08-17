@@ -173,6 +173,7 @@
   <div class="card">
     <div class="row">
       <button id="recBtn" class="primary">🎙 Записать с микрофона</button>
+      <button id="liveBtn" title="WebSocket /v1/audio/stream: аудио уходит на сервер по мере речи, текст возвращается пофразно, не дожидаясь «Стоп»">📡 Живая диктовка</button>
       <span class="timer" id="timer" hidden>0:00</span>
       <span class="status" id="recStatus"></span>
     </div>
@@ -199,7 +200,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'resp-stream-1';
+const UI_BUILD = 'live-ws-1';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -374,6 +375,134 @@ async function startRecording() {
   $('recBtn').textContent = '⏹ Стоп'; $('recBtn').className = 'rec-on';
   $('timer').hidden = false; $('timer').textContent = '0:00';
   $('recStatus').textContent = 'запись…';
+}
+
+/* ===================== живая диктовка (WebSocket) ====================
+   Здесь браузер СПЕЦИАЛЬНО ничего не решает: снимает PCM, приводит к
+   16 кГц int16 и льёт кадрами в сокет. Где кончается фраза, что считать
+   тишиной и что выбросить — определяет сервер своим silero-vad. Это
+   ровно то, чего не хватало прошлой версии живого режима, где детектор
+   пауз жил в странице и дублировал серверный.                        */
+let live = null;
+
+$('liveBtn').addEventListener('click', () => live ? stopLive() : startLive());
+
+async function startLive() {
+  if (rec) return;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { autoGainControl: false, noiseSuppression: false, echoCancellation: true },
+    });
+  } catch (e) { $('recStatus').textContent = 'нет доступа к микрофону: ' + e.message; return; }
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const params = new URLSearchParams();
+  const tok = TOKEN;
+  if (tok) params.set('token', tok);
+  const mdl = $('model').value;
+  if (mdl) params.set('model', mdl);
+  const ws = new WebSocket(`${proto}://${location.host}/v1/audio/stream?${params}`);
+  ws.binaryType = 'arraybuffer';
+
+  const empty = document.querySelector('#results .empty');
+  if (empty) empty.remove();
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `
+    <div class="status" id="live-mic"><span class="spin"></span>соединение…</div>
+    <div class="result-text" style="min-height:52px"></div>
+    <div class="stream-log"></div>
+    <div class="meta"></div>`;
+  $('results').prepend(card);
+  const textEl = card.querySelector('.result-text');
+  const logEl = card.querySelector('.stream-log');
+  const statusEl = card.querySelector('#live-mic');
+  const metaEl = card.querySelector('.meta');
+  const t0 = performance.now();
+
+  const log = (type, msg) => {
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    const cls = type === 'delta' ? 'delta' : type === 'done' ? 'done' : 'err';
+    line.innerHTML = `<span class="log-t">${((performance.now() - t0) / 1000).toFixed(2)} с</span>` +
+      `<span class="log-type ${cls}">${esc(type)}</span><span class="log-text">${esc(msg)}</span>`;
+    logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  const ctx = new AudioContext();
+  const src = ctx.createMediaStreamSource(stream);
+  const node = ctx.createScriptProcessor(4096, 1, 1);
+  const parts = [];
+  live = { ws, ctx, stream, node, src, startedAt: Date.now() };
+
+  ws.onopen = () => { statusEl.innerHTML = '<span class="spin"></span>говорите — текст появится по фразам…'; };
+
+  ws.onmessage = ev => {
+    const e = JSON.parse(ev.data);
+    if (e.type === 'transcript.text.delta') {
+      parts.push(e.delta);
+      textEl.textContent = parts.join(' ');
+      log('delta', `${e.duration}s → ${e.delta}`);
+    } else if (e.type === 'speech.started') {
+      statusEl.innerHTML = '<span class="spin"></span>речь…';
+    } else if (e.type === 'speech.stopped') {
+      statusEl.innerHTML = '<span class="spin"></span>пауза…';
+    } else if (e.type === 'stream.overflow') {
+      log('error', 'сервер не успевает: старая фраза отброшена');
+    } else if (e.type === 'error') {
+      log('error', e.error);
+    } else if (e.type === 'transcript.text.done') {
+      statusEl.remove();
+      metaEl.textContent = `живая диктовка · ${e.phrases} фраз · сессия ${e.session_sec} с`;
+      log('done', `${e.phrases} фраз`);
+    } else if (e.type === 'session.created') {
+      log('open', `${e.model} · ${e.sample_rate} Гц · пауза ${e.silence_ms} мс`);
+    }
+  };
+
+  ws.onclose = ev => {
+    if (ev.code === 1008) { showGate('Сессия истекла — введите токен заново'); }
+    else if (ev.code === 1013) { log('error', 'сервер занят: лимит одновременных сессий'); }
+    stopLive(true);
+  };
+  ws.onerror = () => log('error', 'ошибка WebSocket');
+
+  // Ресемплинг на лету: AudioContext обычно 48 кГц, сервер ждёт ровно 16 000
+  node.onaudioprocess = ev => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    const f32 = downsample(ev.inputBuffer.getChannelData(0), ctx.sampleRate, 16000);
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]));
+      i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    ws.send(i16.buffer);
+  };
+  const mute = ctx.createGain(); mute.gain.value = 0;
+  src.connect(node); node.connect(mute); mute.connect(ctx.destination);
+
+  live.timerId = setInterval(() => {
+    const s = Math.floor((Date.now() - live.startedAt) / 1000);
+    $('timer').textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }, 250);
+  $('liveBtn').textContent = '⏹ Стоп'; $('liveBtn').className = 'rec-on';
+  $('recBtn').disabled = true;
+  $('timer').hidden = false; $('timer').textContent = '0:00';
+  $('recStatus').textContent = 'живая диктовка…';
+}
+
+function stopLive(fromClose) {
+  if (!live) return;
+  const { ws, ctx, stream, node, src, timerId } = live;
+  live = null;
+  clearInterval(timerId);
+  try { node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop()); ctx.close(); } catch (e) {}
+  // Просим сервер добить хвост последней фразы и прислать итог
+  if (!fromClose && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'close' }));
+  $('liveBtn').textContent = '📡 Живая диктовка'; $('liveBtn').className = '';
+  $('recBtn').disabled = false;
+  $('timer').hidden = true; $('recStatus').textContent = '';
 }
 
 function stopRecording() {

@@ -12,7 +12,16 @@ from fastapi import APIRouter
 from src import __version__
 from src.asr.registry import list_models
 from src.asr.vad import silero_vad
-from src.config import AUTH_TOKEN, DEFAULT_MODEL, ENABLE_DOCS, ENGINE, TIMEOUT_ENABLED, VAD_CHUNKING
+from src.routes.stream import active_sessions as active_stream_sessions
+from src.config import (
+    AUTH_TOKEN,
+    DEFAULT_MODEL,
+    ENABLE_DOCS,
+    ENGINE,
+    STREAM_MAX_SESSIONS,
+    TIMEOUT_ENABLED,
+    VAD_CHUNKING,
+)
 from src.routes.emotion import emotions_available
 from src.services.limits import pending_count
 from src.services.memory_monitor import memory_monitor
@@ -109,6 +118,11 @@ async def health_check() -> dict:
         "docs_enabled": ENABLE_DOCS,
         # VAD-чанкование: дефолт сервера (переопределяется per-request)
         "vad_chunking": VAD_CHUNKING and silero_vad.available(),
+        # Живые WebSocket-сессии потокового приёма аудио (/v1/audio/stream).
+        # Считается отдельно от pending_requests: открытая сессия почти
+        # ничего не стоит, дорог только инференс на закрытии фразы.
+        "stream_sessions": active_stream_sessions(),
+        "stream_max_sessions": STREAM_MAX_SESSIONS,
         "timeout_enabled": TIMEOUT_ENABLED,
         "performance": perf_stats,
         "memory": memory_info,

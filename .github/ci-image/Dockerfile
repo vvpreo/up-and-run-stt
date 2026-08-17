@@ -26,6 +26,7 @@ COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 RUN pip install --no-cache-dir \
     pytest==9.1.1 \
     requests==2.34.2 \
+    websockets==17.0.1 \
     && ffmpeg -version | head -1 \
     && pytest --version
 

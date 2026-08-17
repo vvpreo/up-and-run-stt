@@ -25,7 +25,13 @@ from src.config import (
     CORS_ORIGINS,
     ENABLE_DOCS,
 )
-from src.routes import asr_router, emotion_router, health_router, openai_router
+from src.routes import (
+    asr_router,
+    emotion_router,
+    health_router,
+    openai_router,
+    stream_router,
+)
 from src.routes.openai_compat import router as openai_compat_router
 from src.routes.asr import set_asr_model as set_asr_model_asr
 from src.routes.health import set_asr_model as set_asr_model_health
@@ -125,9 +131,24 @@ def create_app() -> FastAPI:
             "high-quality Russian ASR.\n\n"
             "Endpoints:\n"
             "- **/v1/audio/transcriptions** — OpenAI-compatible (drop-in Whisper API replacement)\n"
-            "- **/stt/asr** — native endpoint with extended response (segments, metrics)\n\n"
+            "- **/stt/asr** — native endpoint with extended response (segments, metrics)\n"
+            "- **/v1/audio/stream** — WebSocket for live audio (see below)\n\n"
             "The instance serves the model set from GIGAAM_MODELS; a specific "
-            "model is selected per request via the `model` field."
+            "model is selected per request via the `model` field.\n\n"
+            "### Two different things are called streaming here\n\n"
+            "**Streaming the response** — `stream=true` on "
+            "`/v1/audio/transcriptions`. The audio goes up as one complete "
+            "request; only the text comes back incrementally, as SSE deltas. "
+            "Use it when you already have the file and want the first words "
+            "early. This matches OpenAI's own `stream=true`.\n\n"
+            "**Streaming the request** — the WebSocket at `/v1/audio/stream`. "
+            "You push raw PCM while the person is still speaking and get text "
+            "back phrase by phrase, without waiting for the recording to end. "
+            "Use it for live dictation. `GET /v1/audio/stream` returns the full "
+            "protocol; OpenAPI cannot describe the WebSocket itself.\n\n"
+            "Note that the model is offline: it needs a complete segment to "
+            "transcribe, so even in the live mode results arrive per phrase, "
+            "never word by word."
         ),
         version=__version__,
         lifespan=lifespan,
@@ -153,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(openai_router)
     app.include_router(openai_compat_router)
     app.include_router(emotion_router)
+    app.include_router(stream_router)
 
     # Проверка токена для WebUI (страница показывает интерфейс только
     # после успешного ответа отсюда)
