@@ -72,6 +72,7 @@
   .grp-t { font-size: 12px; color: var(--text); font-weight: 600; margin-bottom: 9px; letter-spacing: .02em; }
   .grp-t span { font-weight: 400; color: var(--muted); }
   .grp-d { font-size: 12.5px; color: var(--muted); margin-top: 9px; }
+  .slot:not(:empty) { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
   /* Вкладки: три задачи, у каждой свой набор настроек */
   .tabs { display: flex; gap: 6px; margin-bottom: -1px; flex-wrap: wrap; }
   .tab {
@@ -174,17 +175,19 @@
   </h1>
   <div class="sub" id="healthDetail">&nbsp;</div>
 
-  <!-- Наверху только то, что не зависит от способа распознавания -->
-  <div class="card">
-    <div class="row">
-      <label class="opt" id="modelWrap">Модель распознавания
+  <!-- Модель и язык применяются не везде: на вкладке эмоций своя модель,
+       которой ни то, ни другое не передаётся. Поэтому блок не висит
+       сверху, а переезжает в активную вкладку — один и тот же элемент,
+       без дублирования разметки и без синхронизации состояния. -->
+  <div id="commonHolder" hidden>
+    <div class="row" id="commonRow">
+      <label class="opt">Модель распознавания
         <select id="model"></select>
       </label>
-      <label class="opt" id="langWrap">Язык
+      <label class="opt" title="Модель русскоязычная: на распознавание этот параметр не влияет — текст на ru и en получается одинаковый (проверено). Он только проставляет поле language в ответе, что важно клиентам, которые его читают.">Язык в ответе
         <select id="lang"><option value="ru" selected>ru</option><option value="en">en</option></select>
       </label>
     </div>
-    <div class="grp-d" id="topNote"></div>
   </div>
 
   <!-- Три задачи — три вкладки. Раньше они были свалены в один набор
@@ -199,6 +202,7 @@
 
   <div class="card">
     <div class="pane" id="pane-full" hidden>
+      <div class="slot" id="slot-full"></div>
       <div class="row">
         <label class="opt">Ручка
           <select id="endpoint">
@@ -217,6 +221,7 @@
     </div>
 
     <div class="pane" id="pane-live">
+      <div class="slot" id="slot-live"></div>
       <div class="grp-d">
         Ручка <code>WS /stt/stream</code> — наша, <b>не</b> протокол OpenAI Realtime.
         Аудио уходит сырым PCM по мере речи, сервер сам режет поток на фразы своим
@@ -269,7 +274,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'tabs-3';
+const UI_BUILD = 'tabs-5';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -333,6 +338,7 @@ function showApp() {
   $('logoutBtn').hidden = !(HEALTH?.auth_required);
   renderHealth();
   fillModels();
+  placeCommon();
   fillFormats();
   setInterval(async () => { try { HEALTH = await fetchHealth(); renderHealth(); } catch {} }, 15000);
 }
@@ -396,8 +402,17 @@ $('tabs').addEventListener('click', ev => {
   TAB = btn.dataset.tab;
   for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b === btn);
   for (const id of ['full', 'live', 'emo']) $('pane-' + id).hidden = (id !== TAB);
+  placeCommon();
   updateHint();
 });
+
+// Блок «модель + язык» живёт в одном экземпляре и переезжает в активную
+// вкладку. На вкладке эмоций он убирается в скрытый холдер: там своя
+// модель, и ни модель распознавания, ни язык ей не передаются.
+function placeCommon() {
+  const slot = TAB === 'emo' ? $('commonHolder') : $('slot-' + TAB);
+  slot.appendChild($('commonRow'));
+}
 
 $('endpoint').addEventListener('change', fillFormats);
 $('vadOn').addEventListener('change', updateHint);
@@ -423,15 +438,6 @@ function updateHint() {
     el.disabled = !ok;
     if (label) { label.classList.toggle('off', !ok); label.title = ok ? '' : why; }
   };
-
-  // Наверху: модель и язык — про распознавание речи. К эмоциям они
-  // отношения не имеют, там своя модель (проверено: параметр model на
-  // /stt/emotion результат не меняет).
-  const topOk = TAB !== 'emo';
-  gate('model', topOk, 'Эмоции считает отдельная модель GigaAMEmo — выбор модели распознавания на них не влияет');
-  gate('lang', topOk, 'Эмоции языконезависимы: модель классифицирует тон, а не слова');
-  $('topNote').textContent = topOk ? '' :
-    'На этой вкладке модель и язык не применяются: эмоции считает отдельная модель.';
 
   if (TAB === 'full') {
     gate('format', !sse, 'При stream=true ответ приходит дельтами — формат не применяется');
@@ -468,7 +474,7 @@ function updateHint() {
     rows.push(`Формат ответа: ${off('нет, только текстовые дельты')} · Слова: ${off('нет')} · VAD: ${on('всегда включён')} · Только микрофон.`);
   } else if (TAB === 'emo') {
     rows.push(`Ручка: ${on('POST /stt/emotion')} · Отдельная модель GigaAMEmo, к распознаванию речи отношения не имеет.`);
-    rows.push(`Текст: ${off('не возвращается')} · Формат, слова, VAD, стриминг: ${off('не применяются')} · Файл или запись.`);
+    rows.push(`Текст: ${off('не возвращается')} · Формат, слова, VAD, стриминг, модель и язык: ${off('не применяются')} · Файл или запись.`);
   } else {
     rows.push(`Ручка: ${on(ep === 'openai' ? 'POST /v1/audio/transcriptions' : 'POST /stt/asr')} · ` +
       `Вход: ${off('целиком')} одним запросом · Выход: ${sse ? on('SSE-дельты по мере распознавания') : off('целиком в конце')}.`);
@@ -739,6 +745,7 @@ async function transcribe(blob, filename) {
     url = '/v1/audio/transcriptions';
     fd.append('file', blob, filename);
     fd.append('response_format', fmt);
+    fd.append('language', $('lang').value);
     if (mdl) fd.append('model', mdl);
     if (wts) { fd.append('timestamp_granularities[]', 'word'); fd.append('timestamp_granularities[]', 'segment'); }
     fd.append('chunking_strategy', vad ? 'auto' : 'none');

@@ -254,9 +254,15 @@ different endpoints rather than variations of one:
 | Распознавание целиком | `POST /v1/audio/transcriptions` or `POST /stt/asr` | contract, response format, word timestamps, VAD chunking, `stream=true` (OpenAI only) |
 | Распознавание эмоций | `POST /stt/emotion` | none — no text is produced |
 
-Above the tabs sit the only two settings that are not task-specific: recognition
-model and language. They are greyed out on the emotions tab, since emotions come
-from a separate model that neither setting touches.
+Model and language live inside the tabs where they apply — the emotions tab has
+neither, since emotions come from a separate model that receives neither. It is one
+block moved between tabs rather than duplicated, so switching tabs does not reset
+it.
+
+The language selector is labelled "Язык в ответе" on purpose: the model is
+Russian-only, so the parameter does not change recognition at all — `ru` and `en`
+return byte-identical text, verified — it only sets the `language` field in the
+response, which matters to clients that read it.
 
 This layout exists because the previous one lied. `stream=true` is a **parameter**
 of the OpenAI endpoint that changes how the response comes back, while the live
