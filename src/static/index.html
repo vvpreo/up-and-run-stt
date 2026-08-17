@@ -190,13 +190,13 @@
        другую ручку целиком. Внутри вкладки настраивается только то, что
        к этой задаче относится. -->
   <div class="tabs" id="tabs">
-    <button class="tab on" data-tab="full">Распознавание целиком</button>
-    <button class="tab" data-tab="live">Живая диктовка</button>
+    <button class="tab on" data-tab="live">Живая диктовка</button>
+    <button class="tab" data-tab="full">Распознавание целиком</button>
     <button class="tab" data-tab="emo">Распознавание эмоций</button>
   </div>
 
   <div class="card">
-    <div class="pane" id="pane-full">
+    <div class="pane" id="pane-full" hidden>
       <div class="row">
         <label class="opt">Ручка
           <select id="endpoint">
@@ -214,7 +214,7 @@
       <div class="grp-d" id="epDesc"></div>
     </div>
 
-    <div class="pane" id="pane-live" hidden>
+    <div class="pane" id="pane-live">
       <div class="grp-d">
         Ручка <code>WS /stt/stream</code> — наша, <b>не</b> протокол OpenAI Realtime.
         Аудио уходит сырым PCM <b>по мере речи</b>, сервер сам режет поток на фразы
@@ -273,7 +273,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'tabs-1';
+const UI_BUILD = 'tabs-2';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -392,7 +392,8 @@ function fillFormats() {
   updateHint();
 }
 // Активная задача. Определяет, какая ручка вызывается и что показано.
-let TAB = 'full';
+// По умолчанию — живая диктовка: это главный режим консоли.
+let TAB = 'live';
 $('tabs').addEventListener('click', ev => {
   const btn = ev.target.closest('.tab');
   if (!btn || rec || live) return;   // во время записи вкладку не меняем

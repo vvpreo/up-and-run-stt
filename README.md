@@ -250,8 +250,8 @@ different endpoints rather than variations of one:
 
 | Tab | Endpoint | Options it has |
 |---|---|---|
+| Живая диктовка *(default)* | `WS /stt/stream` | none — the answer is always deltas and VAD is always on |
 | Распознавание целиком | `POST /v1/audio/transcriptions` or `POST /stt/asr` | contract, response format, word timestamps, VAD chunking, `stream=true` (OpenAI only) |
-| Живая диктовка | `WS /stt/stream` | none — the answer is always deltas and VAD is always on |
 | Распознавание эмоций | `POST /stt/emotion` | none — no text is produced |
 
 Above the tabs sit the only two settings that are not task-specific: recognition
