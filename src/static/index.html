@@ -72,6 +72,16 @@
   .grp-t { font-size: 12px; color: var(--text); font-weight: 600; margin-bottom: 9px; letter-spacing: .02em; }
   .grp-t span { font-weight: 400; color: var(--muted); }
   .grp-d { font-size: 12.5px; color: var(--muted); margin-top: 9px; }
+  /* Вкладки: три задачи, у каждой свой набор настроек */
+  .tabs { display: flex; gap: 6px; margin-bottom: -1px; flex-wrap: wrap; }
+  .tab {
+    padding: 9px 16px; font-size: 14px; border-radius: 10px 10px 0 0;
+    border: 1px solid var(--border); border-bottom-color: transparent;
+    background: transparent; color: var(--muted);
+  }
+  .tab:hover { color: var(--text); }
+  .tab.on { background: var(--card); color: var(--text); font-weight: 600; border-bottom-color: var(--card); }
+  .tabs + .card { border-top-left-radius: 0; }
   .applies b { color: var(--text); font-weight: 500; }
   .applies .no { text-decoration: line-through; opacity: .55; }
   .warn { background: #33251533; border: 1px solid #7a5c2e; color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-top: 12px; }
@@ -162,57 +172,73 @@
   </h1>
   <div class="sub" id="healthDetail">&nbsp;</div>
 
-  <!-- Настройки идут от общего к частному: сначала то, что применяется
-       всегда, потом выбор контракта с его собственными опциями, и в конце
-       отдельные каналы, которые к контракту транскрибации не относятся. -->
+  <!-- Наверху только то, что не зависит от способа распознавания -->
   <div class="card">
-
-    <!-- 1. Общее: применяется к любой ручке -->
-    <div class="grp">
-      <div class="grp-t">Общее <span>— применяется к любой ручке</span></div>
-      <div class="row">
-        <label class="opt">Модель распознавания
-          <select id="model"></select>
-        </label>
-        <label class="opt" id="langWrap" hidden>Язык
-          <select id="lang"><option value="ru" selected>ru</option><option value="en">en</option></select>
-        </label>
-        <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается. В живой диктовке включён всегда."><input type="checkbox" id="vadOn"> VAD-чанкование</label>
-      </div>
+    <div class="row">
+      <label class="opt" id="modelWrap">Модель распознавания
+        <select id="model"></select>
+      </label>
+      <label class="opt" id="langWrap">Язык
+        <select id="lang"><option value="ru" selected>ru</option><option value="en">en</option></select>
+      </label>
     </div>
+    <div class="grp-d" id="topNote"></div>
+  </div>
 
-    <!-- 2. Ручка распознавания: выбирается ОДНА, у каждой свои опции.
-         Раньше живая диктовка пряталась галочкой «стриминг» рядом с SSE,
-         из-за чего одна галочка означала то параметр ручки OpenAI, то
-         совершенно другую ручку. Теперь это три равноправных варианта. -->
-    <div class="grp">
-      <div class="grp-t">Ручка распознавания <span>— выбирается одна</span></div>
+  <!-- Три задачи — три вкладки. Раньше они были свалены в один набор
+       галочек, из-за чего одна галочка означала то параметр ручки, то
+       другую ручку целиком. Внутри вкладки настраивается только то, что
+       к этой задаче относится. -->
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-tab="full">Распознавание целиком</button>
+    <button class="tab" data-tab="live">Живая диктовка</button>
+    <button class="tab" data-tab="emo">Распознавание эмоций</button>
+  </div>
+
+  <div class="card">
+    <div class="pane" id="pane-full">
       <div class="row">
-        <label class="opt">Эндпоинт
+        <label class="opt">Ручка
           <select id="endpoint">
             <option value="openai" selected>OpenAI · POST /v1/audio/transcriptions</option>
             <option value="native">Нативная · POST /stt/asr</option>
-            <option value="live">Живая диктовка · WS /stt/stream</option>
           </select>
         </label>
         <label class="opt" id="fmtWrap">Формат ответа
           <select id="format"></select>
         </label>
         <label class="toggle" id="wordsWrap"><input type="checkbox" id="wordTs"> Пословные таймстемпы</label>
+        <label class="toggle" id="vadWrap" title="Резка длинного аудио по паузам речи вместо жёстких 30-с чанков; тишина пропускается"><input type="checkbox" id="vadOn"> VAD-чанкование</label>
         <label class="toggle" id="streamWrap" title="Параметр stream=true ручки OpenAI: аудио уходит одним запросом целиком, текст возвращается SSE-дельтами по мере распознавания чанков. Это стриминг ОТВЕТА — вход не стримится."><input type="checkbox" id="streamOn"> Стриминг ответа (SSE)</label>
       </div>
       <div class="grp-d" id="epDesc"></div>
     </div>
 
-    <!-- 3. Дополнительная ручка: свой запрос параллельно основному -->
-    <div class="grp">
-      <div class="grp-t">Дополнительно <span>— отдельный запрос параллельно основному</span></div>
-      <div class="row">
-        <label class="toggle" id="emoWrap" hidden title="POST /stt/emotion — отдельная ручка и отдельная модель GigaAMEmo. В OpenAI-контракте эмоций нет вовсе. Идёт параллельно с распознаванием, работает с любой ручкой и от выбора модели распознавания не зависит."><input type="checkbox" id="emoOn"> Эмоции · POST /stt/emotion</label>
+    <div class="pane" id="pane-live" hidden>
+      <div class="grp-d">
+        Ручка <code>WS /stt/stream</code> — наша, <b>не</b> протокол OpenAI Realtime.
+        Аудио уходит сырым PCM <b>по мере речи</b>, сервер сам режет поток на фразы
+        своим VAD и присылает текст каждой, не дожидаясь конца. Настраивать нечего:
+        формата ответа и пословных таймстемпов здесь нет (только текстовые дельты),
+        а <b>VAD включён всегда</b> — без него сегментатор не знает, где кончается
+        фраза, поэтому это не опция. Работает только с микрофона.
       </div>
     </div>
+
+    <div class="pane" id="pane-emo" hidden>
+      <div class="grp-d">
+        Ручка <code>POST /stt/emotion</code> — отдельная модель GigaAMEmo, отдельный
+        запрос. В OpenAI-контракте эмоций нет вовсе, поэтому это наше расширение.
+        Возвращает вероятности четырёх классов: злость, грусть, нейтрально, позитив.
+        Текст здесь не распознаётся, поэтому формат ответа, таймстемпы, VAD и
+        стриминг не применяются — как и выбор модели распознавания наверху.
+      </div>
+    </div>
+
     <div class="hint" id="fmtHint"></div>
     <div class="applies" id="applies"></div>
+  </div>
+
   </div>
 
   <!-- Один блок ввода на оба способа: раньше файл и микрофон были двумя
@@ -247,7 +273,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'endpoints-1';
+const UI_BUILD = 'tabs-1';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -325,7 +351,7 @@ function renderHealth() {
     $('healthDetail').textContent =
       `v${h.version || '?'} · UI ${UI_BUILD} · engine: ${h.engine} · модели: ${Object.keys(h.models || {}).join(', ')} · ` +
       `RAM: ${Math.round(h.memory?.process_memory_mb ?? 0)} МБ · очередь: ${h.pending_requests ?? 0}`;
-    $('emoWrap').hidden = !h.emotions_enabled;
+    document.querySelector('.tab[data-tab="emo"]').hidden = !h.emotions_enabled;
     $('docsLinks').hidden = !h.docs_enabled;
     if (!vadInit) { $('vadOn').checked = !!h.vad_chunking; vadInit = true; }
   }
@@ -361,18 +387,22 @@ function fillModels() {
 function fillFormats() {
   const ep = $('endpoint').value;
   $('format').innerHTML = FORMATS[ep].map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
-  // Опции показываются только у той ручки, которой они принадлежат:
-  //   формат и слова — у обеих файловых, но не у живой (там всегда дельты);
-  //   SSE — параметр исключительно ручки OpenAI;
-  //   язык — параметр нативной и живой.
-  $('fmtWrap').hidden = ep === 'live';
-  $('wordsWrap').hidden = ep === 'live';
+  // stream=true есть только у ручки OpenAI — это её параметр, а не режим
   $('streamWrap').hidden = ep !== 'openai';
-  $('langWrap').hidden = ep === 'openai';
   updateHint();
 }
+// Активная задача. Определяет, какая ручка вызывается и что показано.
+let TAB = 'full';
+$('tabs').addEventListener('click', ev => {
+  const btn = ev.target.closest('.tab');
+  if (!btn || rec || live) return;   // во время записи вкладку не меняем
+  TAB = btn.dataset.tab;
+  for (const b of document.querySelectorAll('.tab')) b.classList.toggle('on', b === btn);
+  for (const id of ['full', 'live', 'emo']) $('pane-' + id).hidden = (id !== TAB);
+  updateHint();
+});
+
 $('endpoint').addEventListener('change', fillFormats);
-$('emoOn').addEventListener('change', updateHint);
 $('vadOn').addEventListener('change', updateHint);
 $('format').addEventListener('change', updateHint);
 $('wordTs').addEventListener('change', updateHint);
@@ -389,61 +419,66 @@ function updateHint() {
   const ep = $('endpoint').value, fmt = $('format').value;
   const sse = ep === 'openai' && $('streamOn').checked;
   const wordsFmt = ep === 'openai' ? 'verbose_json' : 'json';
-  const wordsOk = ep !== 'live' && !sse && fmt === wordsFmt;
+  const wordsOk = !sse && fmt === wordsFmt;
 
   const gate = (id, ok, why) => {
     const el = $(id), label = el.closest('label');
     el.disabled = !ok;
     if (label) { label.classList.toggle('off', !ok); label.title = ok ? '' : why; }
   };
-  gate('format', !sse, 'При stream=true ответ приходит дельтами — формат не применяется');
-  gate('wordTs', wordsOk, sse
-    ? 'В SSE-дельтах пословных таймстемпов нет'
-    : `Слова возвращаются только в формате ${wordsFmt}`);
 
-  let hint = '';
-  if (ep !== 'live' && !sse && $('wordTs').checked && fmt !== wordsFmt)
-    hint = `Слова в этой ручке возвращаются только в формате ${wordsFmt}.`;
-  $('fmtHint').textContent = hint;
+  // Наверху: модель и язык — про распознавание речи. К эмоциям они
+  // отношения не имеют, там своя модель (проверено: параметр model на
+  // /stt/emotion результат не меняет).
+  const topOk = TAB !== 'emo';
+  gate('model', topOk, 'Эмоции считает отдельная модель GigaAMEmo — выбор модели распознавания на них не влияет');
+  gate('lang', topOk, 'Эмоции языконезависимы: модель классифицирует тон, а не слова');
+  $('topNote').textContent = topOk ? '' :
+    'На этой вкладке модель и язык не применяются: эмоции считает отдельная модель.';
 
-  const DESC = {
-    openai: 'Совместима с OpenAI Whisper API: поле файла <code>file</code>, форматы '
-      + '<code>json</code> <code>text</code> <code>verbose_json</code> <code>srt</code> <code>vtt</code>, '
-      + 'слова только в <code>verbose_json</code>. Работает с OpenAI SDK без переделки. '
-      + 'Единственная ручка с параметром <code>stream=true</code> (SSE).',
-    native: 'Наша ручка: поле файла <code>audio_file</code>, форматы '
-      + '<code>json</code> <code>text</code> <code>srt</code> <code>vtt</code> <code>tsv</code>, '
-      + 'слова только в <code>json</code>, расширенный ответ — сегменты и метрики. '
-      + 'Параметр <code>stream</code> не поддерживает: молча вернёт обычный ответ.',
-    live: 'Наша ручка поверх WebSocket, <b>не</b> протокол OpenAI Realtime. Аудио уходит '
-      + 'сырым PCM <b>по мере речи</b>, сервер сам режет поток на фразы своим VAD и '
-      + 'присылает текст каждой, не дожидаясь конца. Формата ответа и слов здесь нет — '
-      + 'только дельты. <b>Работает только с микрофона</b>: файл сюда подать нельзя.',
-  };
-  $('epDesc').innerHTML = DESC[ep];
+  if (TAB === 'full') {
+    gate('format', !sse, 'При stream=true ответ приходит дельтами — формат не применяется');
+    gate('wordTs', wordsOk, sse
+      ? 'В SSE-дельтах пословных таймстемпов нет'
+      : `Слова возвращаются только в формате ${wordsFmt}`);
+    $('epDesc').innerHTML = ep === 'openai'
+      ? 'Совместима с OpenAI Whisper API: поле файла <code>file</code>, форматы '
+        + '<code>json</code> <code>text</code> <code>verbose_json</code> <code>srt</code> <code>vtt</code>, '
+        + 'слова только в <code>verbose_json</code>. Работает с OpenAI SDK без переделки. '
+        + 'Единственная ручка с параметром <code>stream=true</code>.'
+      : 'Наша ручка: поле файла <code>audio_file</code>, форматы '
+        + '<code>json</code> <code>text</code> <code>srt</code> <code>vtt</code> <code>tsv</code>, '
+        + 'слова только в <code>json</code>, расширенный ответ — сегменты и метрики. '
+        + 'Параметр <code>stream</code> не поддерживает: молча вернёт обычный ответ.';
+  }
 
-  // Зона файла бессмысленна у живой ручки — она принимает только микрофон
-  $('drop').classList.toggle('nofile', ep === 'live');
-  $('dropText').innerHTML = ep === 'live'
+  $('fmtHint').textContent =
+    (TAB === 'full' && !sse && $('wordTs').checked && fmt !== wordsFmt)
+      ? `Слова в этой ручке возвращаются только в формате ${wordsFmt}.` : '';
+
+  // Зона файла: живая диктовка принимает только микрофон
+  $('drop').classList.toggle('nofile', TAB === 'live');
+  $('dropText').innerHTML = TAB === 'live'
     ? '<span style="font-size:12.5px">Живая диктовка принимает только микрофон.<br>'
-      + 'Чтобы распознать файл — выберите ручку OpenAI или нативную.</span>'
+      + 'Чтобы распознать файл — перейдите на другую вкладку.</span>'
     : 'Перетащите аудиофайл или <b>нажмите, чтобы выбрать</b><br>'
       + '<span style="font-size:12px">wav · mp3 · flac · ogg · opus · m4a · webm · wma …</span>';
 
   const on = t => `<b>${t}</b>`, off = t => `<span class="no">${t}</span>`;
   const rows = [];
-  if (ep === 'live') {
-    rows.push(`Вход: ${on('стримится')} — аудио уходит по мере речи · Выход: ${on('фразы')} во время разговора.`);
-    rows.push(`Формат ответа: ${off('нет')} · Слова: ${off('нет')} · VAD: ${on('всегда включён')}`);
+  if (TAB === 'live') {
+    rows.push(`Ручка: ${on('WS /stt/stream')} · Вход: ${on('стримится')} по мере речи · Выход: ${on('фразы')} во время разговора.`);
+    rows.push(`Формат ответа: ${off('нет')} · Слова: ${off('нет')} · VAD: ${on('всегда включён')} · Только микрофон.`);
+  } else if (TAB === 'emo') {
+    rows.push(`Ручка: ${on('POST /stt/emotion')} · Отдельная модель GigaAMEmo, параллельно ничего не распознаётся.`);
+    rows.push(`Текст: ${off('не возвращается')} · Формат, слова, VAD, стриминг: ${off('не применяются')} · Файл или запись.`);
   } else {
-    rows.push(`Вход: ${off('целиком')} — файл или запись уходят одним запросом · ` +
-      `Выход: ${sse ? on('SSE-дельты по мере распознавания') : off('целиком в конце')}.`);
+    rows.push(`Ручка: ${on(ep === 'openai' ? 'POST /v1/audio/transcriptions' : 'POST /stt/asr')} · ` +
+      `Вход: ${off('целиком')} одним запросом · Выход: ${sse ? on('SSE-дельты по мере распознавания') : off('целиком в конце')}.`);
     rows.push(`Формат ответа: ${sse ? off('не применяется, всегда дельты') : on(fmt)} · ` +
       `Слова: ${wordsOk ? on('да') : off(sse ? 'нет в SSE' : `только ${wordsFmt}`)} · ` +
-      `VAD: ${on('действует')}`);
+      `VAD: ${on('действует')} · Файл или запись.`);
   }
-  rows.push(`Эмоции: ${on('доступны с любой ручкой')}, отдельным запросом · ` +
-    `Модель распознавания действует везде и на эмоции не влияет.`);
   $('applies').innerHTML = rows.join('<br>');
 }
 $('streamOn').addEventListener('change', updateHint);
@@ -454,7 +489,7 @@ if (!navigator.mediaDevices?.getUserMedia) { $('recBtn').disabled = true; $('mic
 // Одна кнопка на оба режима: транспорт — деталь реализации, пользователю
 // консоли важно только, приходит ли текст по мере готовности. Это и решает
 // тумблер «Стриминг ответа фразами».
-const liveMode = () => $('endpoint').value === 'live';
+const liveMode = () => TAB === 'live';
 $('recBtn').addEventListener('click', ev => {
   ev.stopPropagation();   // кнопка внутри .drop — иначе откроется и файловый диалог
   if (rec) return stopRecording();
@@ -555,11 +590,6 @@ async function startLive() {
   const src = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const parts = [];
-  // Эмоции считаются по всей записи целиком, поэтому в живом режиме PCM
-  // приходится накапливать — но только если галочка включена, иначе
-  // сессия на час съела бы ~115 МБ в странице впустую.
-  const wantEmo = $('emoOn').checked && !$('emoWrap').hidden;
-  const recorded = [];
   live = { ws, ctx, stream, node, src, startedAt: Date.now() };
 
   ws.onopen = () => { statusEl.innerHTML = '<span class="spin"></span>говорите — текст появится по фразам…'; };
@@ -582,17 +612,6 @@ async function startLive() {
       statusEl.remove();
       metaEl.textContent = `живая диктовка · ${e.phrases} фраз · сессия ${e.session_sec} с`;
       log('done', `${e.phrases} фраз`);
-      if (wantEmo && recorded.length) {
-        const total = recorded.reduce((n, c) => n + c.length, 0);
-        const pcm = new Float32Array(total);
-        let off = 0; for (const c of recorded) { pcm.set(c, off); off += c.length; }
-        const fd = new FormData();
-        fd.append('audio_file', new Blob([encodeWav(pcm, 16000)], { type: 'audio/wav' }), 'live.wav');
-        fetch('/stt/emotion', { method: 'POST', body: fd, headers: authHeaders() })
-          .then(r => r.ok ? r.json() : r.text().then(t => ({ error: t })))
-          .catch(err => ({ error: String(err) }))
-          .then(d => card.insertAdjacentHTML('beforeend', emotionsHtml(d)));
-      }
     } else if (e.type === 'session.created') {
       log('open', `${e.model} · ${e.sample_rate} Гц · пауза ${e.silence_ms} мс`);
     }
@@ -614,7 +633,6 @@ async function startLive() {
       const s = Math.max(-1, Math.min(1, f32[i]));
       i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-    if (wantEmo) recorded.push(f32.slice());
     ws.send(i16.buffer);
   };
   const mute = ctx.createGain(); mute.gain.value = 0;
@@ -701,7 +719,7 @@ $('drop').addEventListener('drop', e => { if (liveMode()) return; const f = e.da
 /* ============================ transcribe ============================= */
 async function transcribe(blob, filename) {
   const ep = $('endpoint').value, fmt = $('format').value, mdl = $('model').value;
-  const wts = $('wordTs').checked, emo = $('emoOn').checked && !$('emoWrap').hidden;
+  const wts = $('wordTs').checked;
   const vad = $('vadOn').checked;
 
   const empty = document.querySelector('#results .empty');
@@ -711,19 +729,12 @@ async function transcribe(blob, filename) {
   card.innerHTML = `<div class="status"><span class="spin"></span>Распознаю <b>${esc(filename)}</b>…</div>`;
   $('results').prepend(card);
 
-  // Эмоции — отдельный запрос к отдельной модели, он ортогонален способу
-  // получения текста. Поэтому запускается ДО ветки стриминга: раньше
-  // `return transcribeStream(...)` стоял выше, и галочка «Эмоции» при
-  // включённом стриминге молча не срабатывала.
-  const emoPromise = emo ? fetch('/stt/emotion', {
-    method: 'POST', body: (() => { const f = new FormData(); f.append('audio_file', blob, filename); return f; })(),
-    headers: authHeaders(),
-  }).then(r => r.ok ? r.json() : r.text().then(t => ({ error: t })))
-    .catch(e => ({ error: String(e) })) : null;
+  // Вкладка «Распознавание эмоций» — своя ручка, текст не распознаётся
+  if (TAB === 'emo') return transcribeEmotion(card, blob, filename);
 
-  // ---- SSE-стриминг (только OpenAI-контракт) ----
+  // ---- SSE-стриминг (только у ручки OpenAI) ----
   if (ep === 'openai' && $('streamOn').checked) {
-    return transcribeStream(card, blob, filename, mdl, vad, emoPromise);
+    return transcribeStream(card, blob, filename, mdl, vad);
   }
 
   let url, fd = new FormData();
@@ -750,14 +761,37 @@ async function transcribe(blob, filename) {
     if (!resp.ok) err = `HTTP ${resp.status}`;
   } catch (e) { err = String(e); }
   const elapsed = (performance.now() - t0) / 1000;
-  const emoData = emoPromise ? await emoPromise : null;
+  const emoData = null;
   const duration = await audioDuration(blob);
 
   renderResult(card, { blob, filename, ep, fmt, mdl, wts, err, bodyText, elapsed, duration, emoData });
 }
 
+/* ============================= эмоции ================================ */
+// Вкладка «Распознавание эмоций»: только POST /stt/emotion, текст не
+// распознаётся вовсе — поэтому ни формата, ни модели распознавания здесь нет.
+async function transcribeEmotion(card, blob, filename) {
+  const t0 = performance.now();
+  const fd = new FormData();
+  fd.append('audio_file', blob, filename);
+  let data;
+  try {
+    const r = await fetch('/stt/emotion', { method: 'POST', body: fd, headers: authHeaders() });
+    if (r.status === 401) { showGate('Сессия истекла — введите токен заново'); return; }
+    data = r.ok ? await r.json() : { error: `HTTP ${r.status}: ${(await r.text()).slice(0, 200)}` };
+  } catch (e) { data = { error: String(e) }; }
+
+  const elapsed = (performance.now() - t0) / 1000;
+  const duration = await audioDuration(blob);
+  const meta = [`⏱ ${elapsed.toFixed(2)} с`, 'POST /stt/emotion'];
+  if (duration) meta.push(`🎧 ${duration.toFixed(1)} с`);
+  card.innerHTML = `<div class="meta">${esc(meta.join(' · '))}</div>`
+    + emotionsHtml(data)
+    + `<audio controls src="${URL.createObjectURL(blob)}"></audio>`;
+}
+
 /* ============================ streaming ============================== */
-async function transcribeStream(card, blob, filename, mdl, vad, emoPromise) {
+async function transcribeStream(card, blob, filename, mdl, vad) {
   const fd = new FormData();
   fd.append('file', blob, filename);
   fd.append('stream', 'true');
@@ -839,8 +873,6 @@ async function transcribeStream(card, blob, filename, mdl, vad, emoPromise) {
   if (duration) { meta.push(`🎧 ${duration.toFixed(1)} с`); meta.push(`⚡ ${(duration / elapsed).toFixed(1)}×`); }
   meta.push('SSE-стриминг'); if (mdl) meta.push(mdl);
   metaEl.textContent = meta.join(' · ');
-  const emoData = emoPromise ? await emoPromise : null;
-  if (emoData) card.insertAdjacentHTML('beforeend', emotionsHtml(emoData));
   card.insertAdjacentHTML('beforeend',
     `<audio controls src="${URL.createObjectURL(blob)}"></audio>
      <details><summary>сырые события (${events.length})</summary><pre>${esc(events.map(e => JSON.stringify(e)).join('\n'))}</pre></details>`);

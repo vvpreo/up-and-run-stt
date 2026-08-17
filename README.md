@@ -245,30 +245,33 @@ regular JSON endpoint because OpenAPI cannot describe a WebSocket.
 
 ### Microphone in the WebUI
 
-The console makes the endpoint an explicit choice, because there are four of
-them and they are not variations of one another:
+The console is organised as three tabs, one per task, because these are three
+different endpoints rather than variations of one:
 
-| Выбор | Ручка | Что делает |
+| Tab | Endpoint | Options it has |
 |---|---|---|
-| OpenAI | `POST /v1/audio/transcriptions` | Whisper-compatible. The only one with `stream=true` (SSE response streaming). |
-| Нативная | `POST /stt/asr` | Our own; richer response. Ignores `stream`. |
-| Живая диктовка | `WS /stt/stream` | Input streams; phrases come back while you speak. Microphone only. |
-| Эмоции | `POST /stt/emotion` | Additive — runs in parallel with any of the above. |
+| Распознавание целиком | `POST /v1/audio/transcriptions` or `POST /stt/asr` | contract, response format, word timestamps, VAD chunking, `stream=true` (OpenAI only) |
+| Живая диктовка | `WS /stt/stream` | none — the answer is always deltas and VAD is always on |
+| Распознавание эмоций | `POST /stt/emotion` | none — no text is produced |
 
-The first three are mutually exclusive and picked from one selector; emotions is
-a checkbox because it is a separate parallel request, not a mode.
+Above the tabs sit the only two settings that are not task-specific: recognition
+model and language. They are greyed out on the emotions tab, since emotions come
+from a separate model that neither setting touches.
 
-This matters because "streaming" meant two unrelated things and one checkbox used
-to cover both. `stream=true` is a **parameter** of the OpenAI endpoint that
-changes how the response comes back; the live WebSocket is a **different endpoint**
-that changes how audio goes in. They are now in different places in the UI, and
-each endpoint shows only the options that belong to it — response format and word
-timestamps disappear for the live endpoint, `stream=true` appears only under
-OpenAI, and a line under the controls states what is in effect.
+This layout exists because the previous one lied. `stream=true` is a **parameter**
+of the OpenAI endpoint that changes how the response comes back, while the live
+WebSocket is a **different endpoint** that changes how audio goes in — and one
+checkbox used to mean both, depending on whether the input was a file or the
+microphone. Emotions had the mirror problem: presented as an option of the
+transcription contract when it is its own endpoint with its own model.
 
-Audio goes in through one block: drop a file, click the frame to pick one, or
-press **🎙 Начать запись**. With the live endpoint selected the file half is
-disabled, since a WebSocket session takes a microphone rather than a file.
+VAD chunking is a toggle only on the first tab. In live dictation it cannot be
+turned off — the segmenter has no way to find phrase boundaries without it — so it
+is stated as a fact rather than offered as a choice.
+
+Audio goes in through one block below the tabs: drop a file, click the frame to
+pick one, or press **🎙 Начать запись**. On the live tab the file half is disabled,
+since a WebSocket session takes a microphone rather than a file.
 
 ### Supported audio input formats
 
