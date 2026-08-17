@@ -55,6 +55,12 @@
   .drop.over { border-color: var(--accent); background: var(--card2); }
   .timer { font-variant-numeric: tabular-nums; color: var(--rec); min-width: 52px; }
   .hint { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+  /* Неприменимая в текущем режиме опция: видно, что она есть, но не действует */
+  label.opt.off, label.toggle.off { opacity: .4; }
+  label.opt.off select, label.toggle.off input { pointer-events: none; }
+  .applies { font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.7; }
+  .applies b { color: var(--text); font-weight: 500; }
+  .applies .no { text-decoration: line-through; opacity: .55; }
   .warn { background: #33251533; border: 1px solid #7a5c2e; color: var(--warn); border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-top: 12px; }
 
   /* ---- gate ---- */
@@ -168,6 +174,7 @@
       <label class="toggle" id="streamWrap" title="Текст приходит по мере готовности, а не целиком в конце. Загруженный файл — SSE-дельты по чанкам (OpenAI transcript.text.delta). Микрофон — WebSocket /v1/audio/stream: аудио уходит по мере речи, фразы возвращаются, не дожидаясь «Стоп»."><input type="checkbox" id="streamOn"> Стриминг ответа фразами</label>
     </div>
     <div class="hint" id="fmtHint"></div>
+    <div class="applies" id="applies"></div>
   </div>
 
   <div class="card">
@@ -199,7 +206,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'one-button-1';
+const UI_BUILD = 'modes-1';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -317,19 +324,55 @@ function fillFormats() {
   updateHint();
 }
 $('endpoint').addEventListener('change', fillFormats);
+$('emoOn').addEventListener('change', updateHint);
+$('vadOn').addEventListener('change', updateHint);
 $('format').addEventListener('change', updateHint);
 $('wordTs').addEventListener('change', updateHint);
 
+// Какие опции реально действуют в выбранном режиме. Проверено запросами:
+//  - stream=true игнорирует response_format и timestamp_granularities —
+//    ответ всегда SSE-дельты, что ни поставь;
+//  - слова приходят только в verbose_json (OpenAI) и json (нативный);
+//  - chunking_strategy при стриминге ДЕЙСТВУЕТ (на 60 с: 11 дельт против 5);
+//  - нативный эндпоинт стриминг не умеет вовсе — вернёт обычный JSON;
+//  - эмоции считает отдельная модель отдельным запросом, поэтому работают
+//    во всех режимах и от выбора модели распознавания не зависят.
 function updateHint() {
-  const ep = $('endpoint').value, fmt = $('format').value, wts = $('wordTs').checked;
+  const ep = $('endpoint').value, fmt = $('format').value;
+  const streaming = $('streamOn').checked && !$('streamWrap').hidden;
+  const wordsFmt = ep === 'openai' ? 'verbose_json' : 'json';
+  const wordsOk = !streaming && fmt === wordsFmt;
+
+  const gate = (id, ok, why) => {
+    const el = $(id), label = el.closest('label');
+    el.disabled = !ok;
+    if (label) { label.classList.toggle('off', !ok); label.title = ok ? '' : why; }
+  };
+
+  gate('format', !streaming, 'При стриминге ответ всегда приходит дельтами — формат не применяется');
+  gate('wordTs', wordsOk, streaming
+    ? 'В стриминге пословных таймстемпов нет: дельты содержат только текст'
+    : `Слова возвращаются только в формате ${wordsFmt}`);
+
   let hint = '';
-  if (ep === 'openai' && wts && fmt !== 'verbose_json')
-    hint = 'Слова в OpenAI-контракте возвращаются только в формате verbose_json.';
-  if (ep === 'native' && wts && fmt !== 'json')
-    hint = 'Слова в нативном контракте возвращаются только в формате json.';
-  if (ep === 'openai' && $('streamOn').checked)
-    hint = 'Стриминг ответа фразами: файл — SSE-дельты по чанкам; микрофон — живая передача по WebSocket, фразы приходят во время речи (формат/слова не применяются).';
+  if (!streaming && $('wordTs').checked && fmt !== wordsFmt)
+    hint = `Слова в этом контракте возвращаются только в формате ${wordsFmt}.`;
   $('fmtHint').textContent = hint;
+
+  // Явная сводка: что действует, а что нет и почему
+  const on = t => `<b>${t}</b>`, off = t => `<span class="no">${t}</span>`;
+  const rows = [];
+  rows.push(streaming
+    ? `Режим: ${on('стриминг ответа фразами')} — файл идёт по SSE, микрофон по WebSocket (аудио уходит по мере речи).`
+    : `Режим: ${on('обычный запрос')} — аудио уходит целиком, ответ приходит целиком.`);
+  rows.push(`Формат ответа: ${streaming ? off('не применяется, всегда дельты') : on(fmt)} · ` +
+            `Слова: ${wordsOk ? on('да') : off(streaming ? 'нет в стриминге' : `только ${wordsFmt}`)}`);
+  rows.push(`VAD-чанкование: ${on(ep === 'openai' ? 'действует' : 'действует')}` +
+            (streaming ? ' (и в SSE тоже; в живом микрофоне включён всегда)' : '') +
+            ` · Эмоции: ${on('во всех режимах')}, отдельной моделью`);
+  rows.push(`Модель распознавания действует везде; на эмоции не влияет.` +
+            (ep === 'native' ? ' Нативный эндпоинт стриминг не поддерживает.' : ''));
+  $('applies').innerHTML = rows.join('<br>');
 }
 $('streamOn').addEventListener('change', updateHint);
 
@@ -439,6 +482,11 @@ async function startLive() {
   const src = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
   const parts = [];
+  // Эмоции считаются по всей записи целиком, поэтому в живом режиме PCM
+  // приходится накапливать — но только если галочка включена, иначе
+  // сессия на час съела бы ~115 МБ в странице впустую.
+  const wantEmo = $('emoOn').checked && !$('emoWrap').hidden;
+  const recorded = [];
   live = { ws, ctx, stream, node, src, startedAt: Date.now() };
 
   ws.onopen = () => { statusEl.innerHTML = '<span class="spin"></span>говорите — текст появится по фразам…'; };
@@ -461,6 +509,17 @@ async function startLive() {
       statusEl.remove();
       metaEl.textContent = `живая диктовка · ${e.phrases} фраз · сессия ${e.session_sec} с`;
       log('done', `${e.phrases} фраз`);
+      if (wantEmo && recorded.length) {
+        const total = recorded.reduce((n, c) => n + c.length, 0);
+        const pcm = new Float32Array(total);
+        let off = 0; for (const c of recorded) { pcm.set(c, off); off += c.length; }
+        const fd = new FormData();
+        fd.append('audio_file', new Blob([encodeWav(pcm, 16000)], { type: 'audio/wav' }), 'live.wav');
+        fetch('/stt/emotion', { method: 'POST', body: fd, headers: authHeaders() })
+          .then(r => r.ok ? r.json() : r.text().then(t => ({ error: t })))
+          .catch(err => ({ error: String(err) }))
+          .then(d => card.insertAdjacentHTML('beforeend', emotionsHtml(d)));
+      }
     } else if (e.type === 'session.created') {
       log('open', `${e.model} · ${e.sample_rate} Гц · пауза ${e.silence_ms} мс`);
     }
@@ -482,6 +541,7 @@ async function startLive() {
       const s = Math.max(-1, Math.min(1, f32[i]));
       i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
+    if (wantEmo) recorded.push(f32.slice());
     ws.send(i16.buffer);
   };
   const mute = ctx.createGain(); mute.gain.value = 0;
@@ -575,9 +635,19 @@ async function transcribe(blob, filename) {
   card.innerHTML = `<div class="status"><span class="spin"></span>Распознаю <b>${esc(filename)}</b>…</div>`;
   $('results').prepend(card);
 
+  // Эмоции — отдельный запрос к отдельной модели, он ортогонален способу
+  // получения текста. Поэтому запускается ДО ветки стриминга: раньше
+  // `return transcribeStream(...)` стоял выше, и галочка «Эмоции» при
+  // включённом стриминге молча не срабатывала.
+  const emoPromise = emo ? fetch('/stt/emotion', {
+    method: 'POST', body: (() => { const f = new FormData(); f.append('audio_file', blob, filename); return f; })(),
+    headers: authHeaders(),
+  }).then(r => r.ok ? r.json() : r.text().then(t => ({ error: t })))
+    .catch(e => ({ error: String(e) })) : null;
+
   // ---- SSE-стриминг (только OpenAI-контракт) ----
   if (ep === 'openai' && $('streamOn').checked) {
-    return transcribeStream(card, blob, filename, mdl, vad);
+    return transcribeStream(card, blob, filename, mdl, vad, emoPromise);
   }
 
   let url, fd = new FormData();
@@ -592,16 +662,6 @@ async function transcribe(blob, filename) {
     url = `/stt/asr?output=${fmt}&language=${$('lang').value}&word_timestamps=${wts}&vad=${vad}`
         + (mdl ? `&model=${mdl}` : '');
     fd.append('audio_file', blob, filename);
-  }
-
-  // эмоции — параллельным запросом
-  let emoPromise = null;
-  if (emo) {
-    const efd = new FormData();
-    efd.append('audio_file', blob, filename);
-    emoPromise = fetch('/stt/emotion', { method: 'POST', body: efd, headers: authHeaders() })
-      .then(r => r.ok ? r.json() : r.text().then(t => ({ error: t })))
-      .catch(e => ({ error: String(e) }));
   }
 
   const t0 = performance.now();
@@ -621,7 +681,7 @@ async function transcribe(blob, filename) {
 }
 
 /* ============================ streaming ============================== */
-async function transcribeStream(card, blob, filename, mdl, vad) {
+async function transcribeStream(card, blob, filename, mdl, vad, emoPromise) {
   const fd = new FormData();
   fd.append('file', blob, filename);
   fd.append('stream', 'true');
@@ -703,12 +763,30 @@ async function transcribeStream(card, blob, filename, mdl, vad) {
   if (duration) { meta.push(`🎧 ${duration.toFixed(1)} с`); meta.push(`⚡ ${(duration / elapsed).toFixed(1)}×`); }
   meta.push('SSE-стриминг'); if (mdl) meta.push(mdl);
   metaEl.textContent = meta.join(' · ');
+  const emoData = emoPromise ? await emoPromise : null;
+  if (emoData) card.insertAdjacentHTML('beforeend', emotionsHtml(emoData));
   card.insertAdjacentHTML('beforeend',
     `<audio controls src="${URL.createObjectURL(blob)}"></audio>
      <details><summary>сырые события (${events.length})</summary><pre>${esc(events.map(e => JSON.stringify(e)).join('\n'))}</pre></details>`);
 }
 
 /* ============================== render =============================== */
+// Общая отрисовка эмоций: используется и обычным путём, и стриминговым —
+// запрос к /stt/emotion один и тот же независимо от способа получения текста
+function emotionsHtml(emoData) {
+  if (!emoData) return '';
+  if (emoData.error) return `<div class="warn">Эмоции: ${esc(String(emoData.error)).slice(0, 200)}</div>`;
+  const EMOJI = { angry: '😠', sad: '😢', neutral: '😐', positive: '😊' };
+  const RU = { angry: 'злость', sad: 'грусть', neutral: 'нейтрально', positive: 'позитив' };
+  return `<details open><summary>эмоции · доминирует: ${EMOJI[emoData.dominant] || ''} ${RU[emoData.dominant] || emoData.dominant}</summary><div class="emotions">`
+    + Object.entries(emoData.emotions).map(([k, v]) =>
+      `<div class="emo-row${k === emoData.dominant ? ' dominant' : ''}">
+         <span>${EMOJI[k] || ''} ${RU[k] || k}</span>
+         <div class="emo-bar"><div class="emo-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
+         <span>${(v * 100).toFixed(1)}%</span></div>`).join('')
+    + `</div></details>`;
+}
+
 function renderResult(card, r) {
   if (r.err) {
     card.innerHTML = `<div class="meta" style="color:var(--err)">Ошибка: ${esc(r.err)}</div><pre>${esc(r.bodyText || '')}</pre>`;
@@ -749,21 +827,7 @@ function renderResult(card, r) {
       + `</details>`;
   }
 
-  if (r.emoData) {
-    if (r.emoData.error) {
-      html += `<div class="warn">Эмоции: ${esc(String(r.emoData.error)).slice(0, 200)}</div>`;
-    } else {
-      const EMOJI = { angry: '😠', sad: '😢', neutral: '😐', positive: '😊' };
-      const RU = { angry: 'злость', sad: 'грусть', neutral: 'нейтрально', positive: 'позитив' };
-      html += `<details open><summary>эмоции · доминирует: ${EMOJI[r.emoData.dominant] || ''} ${RU[r.emoData.dominant] || r.emoData.dominant}</summary><div class="emotions">`
-        + Object.entries(r.emoData.emotions).map(([k, v]) =>
-          `<div class="emo-row${k === r.emoData.dominant ? ' dominant' : ''}">
-             <span>${EMOJI[k] || ''} ${RU[k] || k}</span>
-             <div class="emo-bar"><div class="emo-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
-             <span>${(v * 100).toFixed(1)}%</span></div>`).join('')
-        + `</div></details>`;
-    }
-  }
+  html += emotionsHtml(r.emoData);
 
   html += `<audio controls src="${URL.createObjectURL(r.blob)}"></audio>`;
   if (raw) html += `<details><summary>сырой ответ</summary><pre>${esc(JSON.stringify(raw, null, 2))}</pre></details>`;

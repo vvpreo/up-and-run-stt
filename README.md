@@ -266,6 +266,34 @@ Notes (see `src/static/index.html`):
   visible in the subtitle — if it does not change after a service update, the
   browser is showing a cached copy (Ctrl+Shift+R).
 
+### What combines with what
+
+Not every option applies in every mode, and the server silently ignores the ones
+that do not. The table is what the API actually does, verified by request:
+
+| | Native `/stt/asr` | OpenAI, plain | OpenAI, `stream=true` | Live WebSocket |
+|---|---|---|---|---|
+| Response format | `json` `text` `srt` `vtt` `tsv` | `json` `text` `verbose_json` `srt` `vtt` | **ignored** — always deltas | **ignored** — always deltas |
+| Word timestamps | `json` only | `verbose_json` only | not available | not available |
+| VAD chunking | applies | applies | **applies** (60 s clip: 11 deltas vs 5) | always on |
+| Emotions | yes | yes | yes | yes |
+| Model choice | yes | yes | yes | yes |
+| Streaming | not supported | — | — | — |
+
+Two things worth calling out. `stream=true` **ignores** `response_format` and
+`timestamp_granularities` rather than rejecting them: asking for `srt` with
+streaming returns SSE deltas, not subtitles. And the native endpoint ignores
+`stream` entirely — it answers with ordinary JSON, so streaming exists only on the
+OpenAI contract and on the WebSocket.
+
+Emotions are orthogonal to all of this: they are a separate request to a separate
+model (`/stt/emotion`), so they work in every mode and are unaffected by which
+recognition model you picked.
+
+The WebUI encodes this table — options that do not apply in the current mode are
+greyed out with the reason in their tooltip, and a line under the controls
+summarises what is in effect.
+
 ### Supported audio input formats
 
 Practically every common format is accepted: **wav, flac, mp3, ogg/vorbis, opus,
