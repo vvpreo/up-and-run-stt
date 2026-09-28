@@ -63,8 +63,8 @@ jobs:
           build-args: |
             VERSION=ci-${{ github.sha }}
             REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+          cache-from: type=gha,scope=cpu-${{ matrix.arch }}
+          cache-to: type=gha,scope=cpu-${{ matrix.arch }},mode=max
 
       - name: Start service
         env:
@@ -111,3 +111,36 @@ jobs:
       - name: Service logs on failure
         if: failure()
         run: docker logs stt
+
+  # GPU-образ (Dockerfile.cuda): на раннерах нет GPU, поэтому здесь только
+  # проверка, что он собирается на обеих архитектурах, и прогрев кэша слоёв
+  # для релиза. Работоспособность на GPU проверяется вручную (docs/SPARK.md).
+  build-cuda:
+    name: cuda-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build CUDA image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cuda
+          platforms: linux/${{ matrix.arch }}
+          push: false
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=cuda-${{ matrix.arch }}
+          cache-to: type=gha,scope=cuda-${{ matrix.arch }},mode=max

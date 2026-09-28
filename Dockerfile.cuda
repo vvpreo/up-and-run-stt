@@ -1,0 +1,103 @@
+# Dockerfile.cuda — GPU-вариант up-and-run-stt: тот же код и тот же ONNX-движок,
+# но инференс через CUDAExecutionProvider (onnxruntime-gpu). Собирается под
+# linux/amd64 и linux/arm64 — на aarch64 (DGX Spark, GB10 / sm_121) с ORT >= 1.29
+# штатный wheel с PyPI содержит ядра для sm_121, сборка из исходников не нужна.
+#
+# Отличия от Dockerfile (CPU):
+#   - база nvidia/cuda ...-cudnn-runtime (CUDA 13.0 + cuDNN 9 — требование CUDA EP);
+#   - вместо onnxruntime ставится onnxruntime-gpu (пакеты взаимоисключающи:
+#     делят top-level `onnxruntime`, поэтому CPU-пакет удаляется явно);
+#   - DEVICE=cuda: сервис падает на старте, если GPU не виден, а не работает
+#     молча на CPU.
+#
+# Запуск: docker run --gpus all --ipc=host ... (см. docker-compose.yml, профиль cuda).
+# На машинах с единой памятью (DGX Spark) обязательно CUDA_MEM_LIMIT_MB —
+# cgroup-лимиты Docker GPU-аллокации не ловят, а переполнение вешает хост.
+
+ARG CUDA_IMAGE=nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+
+# ============================ builder =================================
+FROM ${CUDA_IMAGE} AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /bin/uv
+
+ENV UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+
+# Тот же лок, что у CPU-образа (все версии совпадают), затем подмена
+# onnxruntime -> onnxruntime-gpu. Версия GPU-пакета прибита: она определяет
+# требования к CUDA/cuDNN и набор поддерживаемых архитектур GPU.
+ARG ORT_GPU_VERSION=1.30.0
+RUN uv sync --frozen --no-dev --no-install-project \
+    && uv pip uninstall onnxruntime \
+    && uv pip install "onnxruntime-gpu==${ORT_GPU_VERSION}"
+
+# ============================ runtime =================================
+FROM ${CUDA_IMAGE}
+
+ARG VERSION=dev
+ARG REVISION=unknown
+ARG CREATED=""
+LABEL org.opencontainers.image.title="up-and-run-stt-cuda" \
+      org.opencontainers.image.description="Local Russian speech-to-text service (GigaAM, ONNX Runtime, CUDA) with an OpenAI-compatible API" \
+      org.opencontainers.image.source="https://github.com/vvpreo/up-and-run-stt" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${CREATED}"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    INFERENCE_BACKEND=onnx \
+    DEVICE=cuda \
+    GIGAAM_MODELS=v3_e2e_ctc \
+    DEFAULT_LANGUAGE=ru \
+    MODEL_CACHE_DIR=/app/data \
+    PATH="/app/.venv/bin:$PATH" \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
+RUN ffmpeg -version | head -1
+
+# uid 1000 в ubuntu:24.04 уже занят пользователем `ubuntu` — переименовываем
+# его, чтобы совпадать с CPU-образом и правами на томе с весами.
+RUN usermod -l app -d /home/app -m ubuntu && groupmod -n app ubuntu \
+    && usermod -s /usr/sbin/nologin app
+
+WORKDIR /app
+
+RUN mkdir -p /app/vad \
+    && python3 -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/vvpreo/gigaam-v3-onnx/resolve/main/silero_vad.onnx', '/app/vad/silero_vad.onnx')" \
+    && chown -R app:app /app/vad
+
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app src/ /app/src/
+COPY --chown=app:app main.py /app/
+
+RUN mkdir -p /app/data && chown app:app /app/data && chmod 755 /app/data
+
+USER app
+EXPOSE 9007
+
+# Базовый образ NVIDIA ставит entrypoint, печатающий лицензионный баннер при
+# каждом старте — в логах сервиса и в stdout любых `docker run ... python3`
+# это только мусор. Сбрасываем.
+ENTRYPOINT []
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9007/health')" || exit 1
+
+CMD ["python3", "main.py"]

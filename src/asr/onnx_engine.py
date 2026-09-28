@@ -54,16 +54,71 @@ SUPPORTED_ONNX_MODELS = {"v3_ctc", "v3_e2e_ctc", "v3_rnnt", "v3_e2e_rnnt"}
 _MAX_LETTERS_PER_FRAME = 3
 
 
+def _providers(rt) -> list:
+    """
+    Список execution provider'ов по DEVICE (auto|cuda|cpu).
+
+    `auto` берёт CUDA, если пакет onnxruntime-gpu установлен и GPU виден,
+    иначе CPU. `cuda` — требует CUDA явно (ошибка, если недоступна), чтобы
+    GPU-образ не работал молча на CPU.
+
+    CUDA_MEM_LIMIT_MB — потолок арены ORT на GPU. На машинах с единой памятью
+    (DGX Spark) переполнение GPU-памяти не даёт чистой ошибки, а вешает хост,
+    и cgroup-лимиты Docker его не ловят — поэтому кап ставится здесь, в
+    процессе. 0 = без лимита.
+    """
+    device = os.getenv("DEVICE", "auto").lower()
+    if device == "cpu":
+        return ["CPUExecutionProvider"]
+
+    available = rt.get_available_providers()
+    has_cuda = "CUDAExecutionProvider" in available
+    if device == "cuda" and not has_cuda:
+        raise RuntimeError(
+            f"DEVICE=cuda but CUDAExecutionProvider is not available "
+            f"(providers: {available}); install onnxruntime-gpu and run with GPU"
+        )
+    if not has_cuda:
+        return ["CPUExecutionProvider"]
+
+    cuda_opts = {"cudnn_conv_algo_search": "HEURISTIC"}
+    limit_mb = int(os.getenv("CUDA_MEM_LIMIT_MB", "0"))
+    if limit_mb > 0:
+        cuda_opts["gpu_mem_limit"] = limit_mb << 20
+    return [("CUDAExecutionProvider", cuda_opts), "CPUExecutionProvider"]
+
+
+def _device_of(session) -> str:
+    """'cuda' или 'cpu' — по первому провайдеру созданной сессии."""
+    first = (session.get_providers() or ["CPUExecutionProvider"])[0]
+    return "cuda" if first == "CUDAExecutionProvider" else "cpu"
+
+
 def _download(url: str, dest: Path) -> Path:
+    """
+    Скачивает файл, если его ещё нет. Пишет во временный файл и переименовывает
+    только после проверки размера по Content-Length: оборванная загрузка не
+    должна оставаться в кэше под именем модели (иначе сервис при каждом старте
+    падает на «Protobuf parsing failed», пока файл не удалят руками).
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         return dest
     logger.info(f"Downloading {url} -> {dest}")
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with urllib.request.urlopen(url) as src, open(tmp, "wb") as out:
-        while chunk := src.read(1 << 20):
-            out.write(chunk)
-    tmp.rename(dest)
+    try:
+        with urllib.request.urlopen(url) as resp, open(tmp, "wb") as out:
+            expected = int(resp.headers.get("Content-Length") or 0)
+            got = 0
+            while chunk := resp.read(1 << 20):
+                out.write(chunk)
+                got += len(chunk)
+        if expected and got != expected:
+            raise IOError(f"truncated download: {got} of {expected} bytes")
+        tmp.replace(dest)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return dest
 
 
@@ -158,6 +213,7 @@ class GigaAMOnnxASR(ASRModel):
         self._blank_id: int = 0
         self._pred_sess = None
         self._joint_sess = None
+        self.device = "cpu"  # фактическое устройство после load_model
 
     # ------------------------------------------------------------------ load
 
@@ -212,10 +268,24 @@ class GigaAMOnnxASR(ASRModel):
             opts.intra_op_num_threads = threads
         opts.log_severity_level = 3
 
+        providers = _providers(rt)
         self.model = rt.InferenceSession(
-            str(model_path), providers=["CPUExecutionProvider"], sess_options=opts
+            str(model_path), providers=providers, sess_options=opts
         )
+        self.device = _device_of(self.model)
+        # onnxruntime-gpu объявляет CUDAExecutionProvider доступным даже на
+        # хосте без GPU/драйвера — и тогда сессия молча создаётся на CPU.
+        # При DEVICE=cuda это ошибка конфигурации, а не режим работы.
+        if os.getenv("DEVICE", "auto").lower() == "cuda" and self.device != "cuda":
+            raise RuntimeError(
+                "DEVICE=cuda but the ONNX session fell back to CPU: no usable GPU "
+                "(run with --gpus all and a matching NVIDIA driver / cuDNN 9)"
+            )
         if self._is_rnnt:
+            # Декодер и joint — крошечные сети, которые дёргаются на каждый
+            # кадр в цикле greedy-декода: на GPU их съел бы оверхед запуска
+            # ядер (сотни вызовов на фразу), поэтому они всегда на CPU.
+            # Энкодер (вся тяжесть) — на выбранном устройстве.
             self._pred_sess = rt.InferenceSession(
                 str(parts["decoder"]), providers=["CPUExecutionProvider"], sess_options=opts
             )
@@ -224,7 +294,15 @@ class GigaAMOnnxASR(ASRModel):
             )
             self._pred_hidden = int(cfg.head.decoder.pred_hidden)
             self._pred_layers = int(cfg.head.decoder.pred_rnn_layers)
-        logger.info(f"ONNX model '{name}{ONNX_VARIANT}' loaded ({model_path.stat().st_size >> 20} MB)")
+        logger.info(
+            f"ONNX model '{name}{ONNX_VARIANT}' loaded "
+            f"({model_path.stat().st_size >> 20} MB) on {self.device}"
+        )
+
+    def get_info(self) -> dict:
+        info = super().get_info()
+        info["device"] = getattr(self, "device", None)
+        return info
 
     def _cleanup_model(self) -> None:
         self.model = None

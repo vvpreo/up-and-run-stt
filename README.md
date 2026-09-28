@@ -78,7 +78,56 @@ curl -s http://localhost:9007/v1/audio/transcriptions \
 ```
 
 Available tags: `latest`, plus `X.Y.Z` / `X.Y` / `X` — pin as tightly as you like.
-The image is **~0.7 GB** (inference on ONNX Runtime, no PyTorch).
+The image is **~0.7 GB** (inference on ONNX Runtime, no PyTorch). For NVIDIA GPUs
+there is a separate `cuda` tag — see [GPU variant](#gpu-variant-cuda).
+
+### GPU variant (CUDA)
+
+The same service and the same ONNX engine, with inference on
+`CUDAExecutionProvider` instead of the CPU. It is a **separate image** —
+`vvpreo/up-and-run-stt:cuda` (plus `X.Y.Z-cuda` / `X.Y-cuda` / `X-cuda`), built from
+`Dockerfile.cuda` for both `linux/amd64` and `linux/arm64`. The CPU image is not
+affected by it. Requirements on the host: an NVIDIA driver and the NVIDIA
+Container Toolkit (`--gpus all`). The image is ~3.7 GB, almost all of it the
+CUDA 13 / cuDNN 9 runtime.
+
+```bash
+docker run -d --name up-and-run-stt-cuda \
+  --gpus all --ipc=host \
+  -p 9007:9007 \
+  -v gigaam-models:/app/data \
+  -e AUTH_TOKEN=change-me \
+  -e GIGAAM_MODELS=v3_e2e_ctc,v3_e2e_rnnt \
+  -e CUDA_MEM_LIMIT_MB=4096 \
+  --restart unless-stopped \
+  vvpreo/up-and-run-stt:cuda
+```
+
+| Flag / variable | Why it matters |
+|---|---|
+| `--gpus all` | Without it the container sees no GPU and, because the image sets `DEVICE=cuda`, refuses to start instead of silently running on the CPU. |
+| `DEVICE` | `cuda` (image default), `cpu`, or `auto` (CUDA if available, otherwise CPU). |
+| `CUDA_MEM_LIMIT_MB` | Cap on the ONNX Runtime GPU arena, in MB (`0` = no cap). Set it on machines with unified memory (DGX Spark): there GPU allocations are invisible to Docker's cgroup limits, and running out of memory hangs the host rather than failing the process. 4 GB is plenty for both models. |
+
+`/health` reports the effective device (`"device": "cuda"`). The weights volume
+is the same as for the CPU image (fp32 ONNX; do not use the `.int8` variant on
+CUDA). With `v3_e2e_rnnt` the encoder runs on the GPU while the tiny
+per-frame decoder stays on the CPU on purpose — kernel-launch overhead would make
+it slower on the GPU — so RNNT costs a few CPU cores under load.
+
+Measured on a DGX Spark (GB10, arm64): a 137 s clip in 0.53 s (~260× realtime,
+20× the reference CPU); in live dictation one phrase takes ~35 ms and the
+end-of-phrase latency stays at ~0.1 s up to 40 concurrent sessions, with the GPU
+below 10 % busy; the container takes ~4 GB with both models loaded. Full numbers,
+including behaviour next to a large LLM on the same GPU, are in
+[`docs/SPARK_BENCHMARK.md`](docs/SPARK_BENCHMARK.md); operational notes for the
+Spark are in [`docs/SPARK.md`](docs/SPARK.md).
+
+From source: `./build.sh --cuda` or `docker compose --profile cuda up -d up-and-run-stt-cuda`
+(the profile shares port 9007 with the CPU service, so run one or the other).
+The image installs the same `uv.lock` as the CPU one and then swaps `onnxruntime`
+for a pinned `onnxruntime-gpu`; the two packages are mutually exclusive, which is
+why the swap lives in the Dockerfile rather than in an extra.
 
 ### Running from source
 
@@ -320,6 +369,10 @@ Everything is configured through environment variables at runtime — in the
 `environment` block of `docker-compose.yml` (comments included there) or via
 `docker run -e`. 
 
+Inference device: `DEVICE=auto|cuda|cpu` (the CPU image has no CUDA provider,
+so `auto` means CPU there; the CUDA image defaults to `cuda`), and
+`CUDA_MEM_LIMIT_MB` for the GPU memory cap — see [GPU variant](#gpu-variant-cuda).
+
 ### Models: the instance set and per-request selection
 
 An instance serves the set of models listed in `GIGAAM_MODELS` (for example,
@@ -372,6 +425,8 @@ docker run --rm -v gigaam-models:/data alpine ls -lh /data/gigaam
 ## Performance (on this CPU)
 
 Host: **Intel Core i7-8750H** (6 cores / 12 threads, 2.2 GHz), 64 GB RAM, no GPU.
+
+GPU numbers (DGX Spark, GB10) are in [`docs/SPARK_BENCHMARK.md`](docs/SPARK_BENCHMARK.md).
 
 <!-- PERF_TABLE_START -->
 Measured on 30 clips from FLEURS `ru_ru` (6.2 min of clean read speech). Details,

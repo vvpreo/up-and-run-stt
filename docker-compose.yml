@@ -100,6 +100,49 @@ services:
       # First start downloads the model before the server is ready.
       start_period: 300s
 
+  # --- GPU-вариант (профиль cuda) -------------------------------------------
+  # Тот же сервис на onnxruntime-gpu (см. Dockerfile.cuda). Поднимается только
+  # явно: `docker compose --profile cuda up -d up-and-run-stt-cuda`. Занимает
+  # тот же порт 9007, поэтому одновременно с CPU-вариантом не запускается.
+  up-and-run-stt-cuda:
+    profiles: ["cuda"]
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    image: up-and-run-stt-cuda:latest
+    container_name: up-and-run-stt-cuda
+    ports:
+      - "0.0.0.0:9007:9007"
+    ipc: host
+    gpus: all
+    environment:
+      GIGAAM_MODELS: v3_e2e_ctc,v3_e2e_rnnt
+      # cuda — упасть на старте, если GPU не виден (не работать молча на CPU)
+      DEVICE: cuda
+      # Потолок GPU-арены ORT, МБ. На машинах с единой памятью (DGX Spark)
+      # обязателен: cgroup-лимиты GPU-аллокации не ловят, переполнение вешает хост.
+      CUDA_MEM_LIMIT_MB: "8192"
+      DEFAULT_LANGUAGE: ru
+      HOST: 0.0.0.0
+      PORT: "9007"
+      MODEL_CACHE_DIR: /app/data
+      MODEL_IDLE_TIMEOUT: "0"
+      MODEL_WORKERS: "1"
+      AUTH_TOKEN: your_token
+      MAX_UPLOAD_MB: "200"
+      MAX_PENDING_REQUESTS: "8"
+      ENABLE_DOCS: "true"
+      LOG_LEVEL: INFO
+    volumes:
+      - gigaam-models:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9007/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+
 volumes:
   gigaam-models:
     name: gigaam-models

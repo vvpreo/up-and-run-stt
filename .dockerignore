@@ -73,3 +73,6 @@ Thumbs.db
 Dockerfile*
 docker-compose*
 .dockerignore
+
+# Стенд замеров (Spark) — в образ не входит
+benchmark/

@@ -108,6 +108,8 @@ async def health_check() -> dict:
         # Набор моделей инстанса и их состояние; выбор — полем `model` запроса
         "models": {name: m.is_loaded() for name, m in list_models().items()},
         "default_model": DEFAULT_MODEL,
+        # Фактическое устройство инференса модели по умолчанию: cuda | cpu
+        "device": (_asr_model.get_info().get("device") if _asr_model is not None else None),
         # Запросы в обработке/очереди (лимит — MAX_PENDING_REQUESTS)
         "pending_requests": pending_count(),
         # Требуется ли Bearer-токен (для гейта WebUI)
