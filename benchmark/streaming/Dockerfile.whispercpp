@@ -1,0 +1,46 @@
+# whisper.cpp с CUDA под arm64 (DGX Spark, GB10 / sm_121) — стенд для замера
+# throughput Whisper large-v3-turbo. Не часть сервиса: только whisper-cli,
+# whisper-server и whisper-bench. Архитектуры 120 и 121: сборка только под 121a
+# даёт «no kernel image is available» (тред NVIDIA про whisper.cpp на Spark).
+#
+# Сборка (на Spark):
+#   docker build -f benchmark/streaming/Dockerfile.whispercpp -t gigam-serving-whispercpp:dev .
+# Модель качается при первом запуске в том:
+#   docker run --rm --gpus all -v gigam-serving-whisper-models:/models gigam-serving-whispercpp:dev \
+#       bash -c "/opt/whisper.cpp/models/download-ggml-model.sh large-v3-turbo /models"
+
+ARG CUDA_DEVEL=nvidia/cuda:13.0.1-devel-ubuntu24.04
+ARG CUDA_RUNTIME=nvidia/cuda:13.0.1-runtime-ubuntu24.04
+
+FROM ${CUDA_DEVEL} AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ARG WHISPER_REF=master
+RUN git clone --depth 1 --branch ${WHISPER_REF} https://github.com/ggml-org/whisper.cpp /opt/whisper.cpp
+WORKDIR /opt/whisper.cpp
+# libggml-cuda дёргает driver API (cuGetErrorString и т.п.); в devel-образе
+# настоящей libcuda.so нет, только стаб в lib64/stubs — без него линковка
+# падает с «undefined reference to cuGetErrorString».
+ENV LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+RUN cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="120;121" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
+        -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs -lcuda" \
+        -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build -j 8 --config Release --target whisper-cli whisper-server whisper-bench
+
+FROM ${CUDA_RUNTIME}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/whisper.cpp/build/bin/ /usr/local/bin/
+COPY --from=builder /opt/whisper.cpp/build/src/*.so* /usr/local/lib/
+COPY --from=builder /opt/whisper.cpp/build/ggml/src/*.so* /usr/local/lib/
+COPY --from=builder /opt/whisper.cpp/build/ggml/src/ggml-cuda/*.so* /usr/local/lib/
+COPY --from=builder /opt/whisper.cpp/models/download-ggml-model.sh /opt/whisper.cpp/models/download-ggml-model.sh
+# whisper.cpp кладёт .so рядом с бинарями в build/bin — они уезжают в /usr/local/bin
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/bin
+WORKDIR /work
+CMD ["whisper-cli", "--help"]

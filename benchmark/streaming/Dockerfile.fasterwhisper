@@ -1,0 +1,64 @@
+# faster-whisper (CTranslate2 + CUDA 13) под arm64 / DGX Spark (GB10, sm_121).
+# Стенд для замера батчинга окон; не часть сервиса.
+#
+# У CTranslate2 нет официальных aarch64-wheel с CUDA — собираем из исходников:
+# C++-библиотека с CUDA/cuDNN под sm_120/121 (CUDA_ARCH_LIST — свой флаг CT2, старый
+# FindCUDA; CMAKE_CUDA_ARCHITECTURES он игнорирует, а «Auto» без GPU в контейнере
+# подставляет Jetson-архитектуры 5.3, которых нет в CUDA 13), затем Python-обёртка
+# (pip wheel) поверх неё. Флаги — как в сторонней сборке на Spark
+# (assix/ctranslate2-aarch64-cuda13-binaries, v4.6.0): без MKL, с OpenBLAS.
+#
+# Сборка (на Spark, ~30 мин):
+#   docker build -f benchmark/streaming/Dockerfile.fasterwhisper -t gigam-serving-fasterwhisper:dev .
+
+ARG CUDA_DEVEL=nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04
+ARG CUDA_RUNTIME=nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+
+# ============================ builder =================================
+FROM ${CUDA_DEVEL} AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake build-essential ca-certificates libopenblas-dev \
+    python3 python3-dev python3-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG CT2_REF=v4.6.0
+RUN git clone --recursive --depth 1 --branch ${CT2_REF} https://github.com/OpenNMT/CTranslate2.git /opt/ct2-src
+
+WORKDIR /opt/ct2-src
+# CMake 3.28 не принимает «12.x» в CUDA_ARCH_LIST (регулярка на однозначный
+# major) — патчим модуль, см. patch_cmake_arch.py.
+COPY benchmark/streaming/patch_cmake_arch.py /tmp/patch_cmake_arch.py
+RUN python3 /tmp/patch_cmake_arch.py
+# OPENMP_RUNTIME=COMP -> libgomp (ставится в runtime явно). Ruy — быстрый int8
+# на ARM для CPU-пути.
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/ctranslate2 \
+        -DWITH_CUDA=ON -DWITH_CUDNN=ON -DCUDA_ARCH_LIST="12.0;12.1" \
+        -DWITH_MKL=OFF -DWITH_OPENBLAS=ON -DWITH_RUY=ON -DOPENMP_RUNTIME=COMP \
+        -DBUILD_CLI=OFF \
+    && cmake --build build -j 10 && cmake --install build
+
+# Python-обёртка: wheel, собранный против /opt/ctranslate2
+RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -U pip setuptools wheel pybind11 \
+    && cd python && CTRANSLATE2_ROOT=/opt/ctranslate2 /opt/venv/bin/pip wheel --no-deps --no-build-isolation -w /opt/wheels . \
+    && ls -la /opt/wheels
+
+# ============================ runtime =================================
+FROM ${CUDA_RUNTIME}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv libopenblas0 libgomp1 ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/ctranslate2 /opt/ctranslate2
+COPY --from=builder /opt/wheels /opt/wheels
+ENV LD_LIBRARY_PATH=/opt/ctranslate2/lib
+RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir -U pip \
+    && /opt/venv/bin/pip install --no-cache-dir /opt/wheels/ctranslate2-*.whl \
+    && /opt/venv/bin/pip install --no-cache-dir "faster-whisper>=1.1" numpy soundfile huggingface_hub \
+    && /opt/venv/bin/python -c "import ctranslate2 as c; print('ct2', c.__version__, 'cuda devices', c.get_cuda_device_count())" || true
+ENV PATH=/opt/venv/bin:$PATH \
+    HF_HOME=/models/hf
+# Баннер entrypoint базового образа — в stdout, мешает скриптам
+ENTRYPOINT []
+WORKDIR /work
+CMD ["python3", "-c", "import ctranslate2 as c; print(c.__version__, c.get_supported_compute_types('cuda'))"]
