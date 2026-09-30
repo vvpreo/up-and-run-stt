@@ -49,7 +49,7 @@ stt_run() {  # stt_run <label> <sessions>
   kill $mon 2>/dev/null; wait $mon 2>/dev/null
   python3 - "$out/$label.json" <<'EOF'
 import json,sys; r=json.load(open(sys.argv[1])); L=r["latency_end_to_text_sec"]; I=r["inference_sec"]
-print(f'{sys.argv[1]}: sessions={r["sessions"]} phrases={r["phrases_total"]} overflow={r["overflow_total"]} lat p50={L["p50"]} p95={L["p95"]} max={L["max"]} | inf p50={I["p50"]} p95={I["p95"]} max={I["max"]}')
+print(f'{sys.argv[1]}: sessions={r["sessions"]} phrases={r["phrases_total"]} overflow={r["overflow_total"]} lat p50={L["p50"]} p95={L["p95"]} max={L["max"]} | inf p50={I.get("p50")} p95={I.get("p95")}')
 EOF
 }
 

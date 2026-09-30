@@ -58,6 +58,7 @@ class Phrase:
     start_sec: float           # смещение от начала сессии
     duration_sec: float
     forced: bool               # закрыта по лимиту длины, а не по паузе
+    phrase_id: int = 0         # номер фразы в сессии (PhraseSegmenter.phrase_id на момент закрытия)
 
 
 class PhraseSegmenter:
@@ -157,6 +158,50 @@ class PhraseSegmenter:
 
     # ----------------------------------------------------------------- выход
 
+    def configure(self, *, threshold: Optional[float] = None, silence_ms: Optional[int] = None) -> None:
+        """Сменить порог VAD и длину закрывающей паузы на лету (session.update)."""
+        if threshold is not None:
+            self._threshold = float(threshold)
+        if silence_ms is not None:
+            self._silence_ms = int(silence_ms)
+
+    def split_at(self, n_samples: int) -> Optional[Phrase]:
+        """
+        Мягкий срез: закрыть первые n_samples текущей фразы как готовую фразу,
+        остаток оставить началом следующей (речь в нём продолжается). Место
+        среза выбирает вызывающий — граница между словами, а не счётчик.
+        """
+        if not self._buffer:
+            return None
+        audio = np.concatenate(self._buffer)
+        if not (0 < n_samples < len(audio)):
+            return None
+        start = (self._consumed - len(audio)) / SAMPLE_RATE
+        closed_id = self.phrase_id
+        self.phrase_id += 1
+        tail = audio[n_samples:].copy()
+        self._buffer = [tail]
+        self._buffered = len(tail)
+        # _saw_speech и счётчик паузы не трогаем: фраза продолжается
+        return Phrase(
+            audio=audio[:n_samples].copy(),
+            start_sec=max(0.0, start),
+            duration_sec=n_samples / SAMPLE_RATE,
+            forced=True,
+            phrase_id=closed_id,
+        )
+
+    def clear(self) -> None:
+        """Выбросить накопленное аудио текущей фразы (input_audio_buffer.clear)."""
+        self._partial = np.zeros(0, dtype=np.float32)
+        self._reset_buffer()
+        self.is_speaking = False
+
+    @property
+    def has_speech(self) -> bool:
+        """Есть ли в текущей незакрытой фразе речь."""
+        return self._saw_speech
+
     @property
     def consumed(self) -> int:
         """Сколько сэмплов принято с начала сессии (для «есть ли новое аудио»)."""
@@ -203,6 +248,7 @@ class PhraseSegmenter:
                 audio = audio[: len(audio) - trim]
 
         n = len(audio)
+        closed_id = self.phrase_id
         self._reset_buffer()
 
         if n < self._min_samples:
@@ -212,6 +258,7 @@ class PhraseSegmenter:
             start_sec=max(0.0, start),
             duration_sec=n / SAMPLE_RATE,
             forced=forced,
+            phrase_id=closed_id,
         )
 
     def _reset_buffer(self) -> None:

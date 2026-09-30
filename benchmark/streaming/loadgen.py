@@ -4,12 +4,14 @@
 
 Два режима:
 
-  ws    — N параллельных сессий WS /stt/stream. Каждая льёт один и тот же
-          wav (16 кГц моно s16le) кадрами по --frame-ms в реальном времени
-          (--speed 1.0) или быстрее. Для каждой фразы (transcript.text.delta)
-          считается задержка «последний сэмпл фразы отправлен -> текст получен»
-          (в неё входит подтверждение паузы STREAM_SILENCE_MS, очередь и
-          инференс) и отдельно inference_sec с сервера.
+  ws    — N параллельных сессий WS /v1/realtime (OpenAI Realtime, транскрипция).
+          Каждая льёт один и тот же wav (16 кГц моно s16le) кадрами по --frame-ms
+          в реальном времени (--speed 1.0) или быстрее. Для каждой фразы
+          считается задержка «сервер подтвердил паузу (speech_stopped) -> пришёл
+          completed»: очередь к модели плюс инференс. Чтобы получить «замолчал ->
+          текст», прибавьте паузу закрытия фразы (STREAM_SILENCE_MS, 600 мс).
+          До 2026-09-30 стенд ходил в удалённый /stt/stream и мерил от конца
+          аудио фразы — те цифры больше на ~0.1 с (docs/SPARK_BENCHMARK.md).
   http  — N параллельных POST /v1/audio/transcriptions одного файла; меряется
           время ответа каждого запроса -> RTF под нагрузкой.
 
@@ -72,15 +74,19 @@ def _read_pcm(path: str, limit_sec: float) -> bytes:
 
 # ------------------------------------------------------------------ ws mode
 
+T_EVENT = "conversation.item.input_audio_transcription."
+
 
 async def _ws_session(idx: int, args, pcm: bytes, results: dict) -> None:
+    """Одна сессия WS /v1/realtime (OpenAI Realtime, транскрипция)."""
+    import base64
+
     import websockets
 
-    url = f"{args.url}?language=ru"
-    if args.token:
-        url += f"&token={args.token}"
+    url = args.url + ("&" if "?" in args.url else "?") + "intent=transcription"
     if args.model:
         url += f"&model={args.model}"
+    headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
 
     frame_bytes = int(16000 * args.frame_ms / 1000) * 2
     frame_sec = args.frame_ms / 1000 / args.speed
@@ -88,8 +94,7 @@ async def _ws_session(idx: int, args, pcm: bytes, results: dict) -> None:
 
     rec = results[idx] = {
         "phrases": 0,
-        "latency": [],        # конец аудио фразы -> текст
-        "inference": [],      # inference_sec с сервера
+        "latency": [],        # пауза подтверждена (speech_stopped) -> текст фразы
         "overflow": 0,
         "errors": [],
         "chars": 0,
@@ -98,15 +103,24 @@ async def _ws_session(idx: int, args, pcm: bytes, results: dict) -> None:
 
     await asyncio.sleep(idx * args.stagger)
     t_connect = time.perf_counter()
-    async with websockets.connect(url, max_size=None) as ws:
+    async with websockets.connect(url, additional_headers=headers, max_size=None) as ws:
         first = json.loads(await ws.recv())
         if first.get("type") != "session.created":
             rec["errors"].append(f"unexpected first event: {first}")
             return
         rec["connect_sec"] = round(time.perf_counter() - t_connect, 3)
+        # wav уже 16 кГц — просим сервер не ресемплить (расширение format.rate)
+        await ws.send(json.dumps({"type": "session.update", "session": {
+            "type": "transcription",
+            "audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000},
+                                "transcription": {"language": "ru"}}},
+        }}))
 
         t0 = time.perf_counter()  # момент отправки сэмпла с offset 0
-        done = asyncio.Event()
+        stopped_at: dict = {}      # item_id -> audio_end_ms
+        pending: set = set()
+        sent_all = asyncio.Event()
+        texts: list = []
 
         async def sender():
             pos = 0
@@ -116,36 +130,51 @@ async def _ws_session(idx: int, args, pcm: bytes, results: dict) -> None:
                 delay = target - time.perf_counter()
                 if delay > 0:
                     await asyncio.sleep(delay)
-                await ws.send(pcm[pos : pos + frame_bytes])
+                await ws.send(json.dumps({
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(pcm[pos : pos + frame_bytes]).decode(),
+                }))
                 pos += frame_bytes
                 i += 1
-            await ws.send(json.dumps({"type": "close"}))
+            await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            sent_all.set()
 
         async def receiver():
-            async for raw in ws:
+            while True:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=6 if sent_all.is_set() else 600)
+                except asyncio.TimeoutError:
+                    return  # аудио кончилось и сервер молчит — фразы закончились
                 ev = json.loads(raw)
                 t = ev.get("type")
-                if t == "transcript.text.delta":
-                    now = time.perf_counter()
-                    # Когда был отправлен последний сэмпл этой фразы: сэмпл с
-                    # offset s уходит в момент t0 + s/speed.
-                    sent_at = t0 + (ev["start"] + ev["duration"]) / args.speed
-                    rec["latency"].append(round(now - sent_at, 3))
-                    rec["inference"].append(ev.get("inference_sec", 0.0))
-                    rec["phrases"] += 1
-                    rec["chars"] += len(ev.get("delta", ""))
-                elif t == "stream.overflow":
-                    rec["overflow"] += 1
+                if t == "input_audio_buffer.speech_stopped":
+                    stopped_at[ev["item_id"]] = ev["audio_end_ms"]
+                elif t == "input_audio_buffer.committed":
+                    pending.add(ev["item_id"])
+                elif t == T_EVENT + "completed":
+                    pending.discard(ev["item_id"])
+                    if ev.get("transcript"):
+                        now = time.perf_counter()
+                        end_ms = stopped_at.get(ev["item_id"])
+                        if end_ms is not None:
+                            # Сэмпл с offset s уходит в момент t0 + s/speed. audio_end_ms —
+                            # позиция в аудио, где сервер подтвердил паузу и закрыл фразу.
+                            rec["latency"].append(round(now - (t0 + end_ms / 1000 / args.speed), 3))
+                        rec["phrases"] += 1
+                        rec["chars"] += len(ev["transcript"])
+                        texts.append(ev["transcript"])
+                    if sent_all.is_set() and not pending:
+                        return
                 elif t == "error":
-                    rec["errors"].append(ev.get("error"))
-                elif t == "transcript.text.done":
-                    rec["wall_sec"] = round(time.perf_counter() - t0, 2)
-                    rec["text"] = ev.get("text", "")
-                    done.set()
-                    return
+                    code = (ev.get("error") or {}).get("code")
+                    if code == "server_overloaded":
+                        rec["overflow"] += 1
+                    elif code != "input_audio_buffer_commit_empty":
+                        rec["errors"].append((ev.get("error") or {}).get("message"))
 
         await asyncio.gather(sender(), receiver())
-        await done.wait()
+        rec["wall_sec"] = round(time.perf_counter() - t0, 2)
+        rec["text"] = " ".join(texts)
 
 
 async def run_ws(args) -> dict:
@@ -156,7 +185,6 @@ async def run_ws(args) -> dict:
     wall = time.perf_counter() - t_start
 
     lat = [v for r in results.values() for v in r["latency"]]
-    inf = [v for r in results.values() for v in r["inference"]]
     return {
         "mode": "ws",
         "sessions": args.sessions,
@@ -167,9 +195,10 @@ async def run_ws(args) -> dict:
         "overflow_total": sum(r["overflow"] for r in results.values()),
         "errors": [e for r in results.values() for e in r["errors"]],
         "latency_end_to_text_sec": _summary(lat),
-        "inference_sec": _summary(inf),
+        # Время инференса в протоколе OpenAI не передаётся — смотреть GET /stats
+        "inference_sec": {"n": 0},
         "per_session": {
-            i: {k: v for k, v in r.items() if k not in ("latency", "inference", "text")}
+            i: {k: v for k, v in r.items() if k not in ("latency", "text")}
             for i, r in results.items()
         },
         "texts": {i: r.get("text", "")[:200] for i, r in results.items()} if args.texts else None,
@@ -231,7 +260,7 @@ async def run_http(args) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("mode", choices=["ws", "http"])
-    ap.add_argument("--url", default=None, help="ws://host:9007/stt/stream или http://host:9007/v1/audio/transcriptions")
+    ap.add_argument("--url", default=None, help="ws://host:9007/v1/realtime или http://host:9007/v1/audio/transcriptions")
     ap.add_argument("--token", default="")
     ap.add_argument("--model", default=None)
     ap.add_argument("--audio", required=True, help="wav 16 кГц моно s16le")
@@ -246,7 +275,7 @@ def main() -> None:
 
     if args.url is None:
         args.url = (
-            "ws://localhost:9007/stt/stream" if args.mode == "ws"
+            "ws://localhost:9007/v1/realtime" if args.mode == "ws"
             else "http://localhost:9007/v1/audio/transcriptions"
         )
 

@@ -27,7 +27,7 @@ from fastapi import APIRouter, HTTPException
 
 from src.asr.registry import list_models
 from src.config import ENABLE_STATS, GIGAAM_MODELS
-from src.routes.stream import active_sessions as active_stream_sessions
+from src.services.live_session import active_sessions as active_stream_sessions
 from src.services.limits import pending_count
 from src.services.meter import meter
 

@@ -198,7 +198,7 @@ network and from other containers. It comes back up after a reboot
 | `POST` | `/v1/audio/transcriptions` | OpenAI-compatible (field `file`). For the OpenAI SDK and any client that speaks the Whisper API. |
 | `POST` | `/stt/asr` | Native (field `audio_file`), richer response: segments, words, metrics. |
 | `POST` | `/stt/emotion` | Speech emotion (GigaAMEmo): angry / sad / neutral / positive. Not part of the OpenAI contract, which has no notion of emotion — hence `/stt/`. |
-| `WS` | `/stt/stream` | Live audio input: push PCM while speaking, get phrases back. A native protocol, not OpenAI's Realtime API. `GET` the same path for the spec. |
+| `WS` | `/v1/realtime` | **Live dictation — OpenAI Realtime API, transcription mode** (GA dialect). Push audio while speaking, get stabilised words and a final transcript per phrase. Point an OpenAI client (official SDK, LiveKit, Pipecat) at this server's `base_url`. `GET` the same path for the spec. |
 | `GET` | `/v1/models`, `/v1/models/{id}` | Models available on this instance (OpenAI format, for GUI clients). |
 | `POST` | `/v1/audio/translations` | Not supported (the model is Russian-only) — returns a proper 400. |
 | `GET`  | `/health` | Status, models, queue, feature flags, memory. |
@@ -244,14 +244,12 @@ audio, as well as `confidence` / `chars_per_second` (diagnostics).
 > **response**, not the request. The audio still goes up as one complete HTTP
 > request; only the text comes back incrementally. To stream the *input* — to
 > feed a live microphone into an open connection — use the WebSocket at
-> [`/stt/stream`](#live-audio-input--websocket-sttstream) instead.
+> [`/v1/realtime`](#live-dictation--websocket-v1realtime-openai-realtime) instead.
 
 This mirrors OpenAI exactly: their `/v1/audio/transcriptions` with `stream=true`
-also streams the response for an already-uploaded file. OpenAI's own streaming
-*input* lives in a separate product, the Realtime API over WebSocket, whose
-protocol this service does **not** implement — `/stt/stream` is a native
-extension with its own protocol, which is why it sits under `/stt/` rather than
-`/v1/`.
+also streams the response for an already-uploaded file, while streaming *input*
+lives in a separate product, the Realtime API over WebSocket. This service
+implements both, under the same paths.
 
 How it works: `-F "stream=true"` → `text/event-stream` with
 `transcript.text.delta` events (emitted as the server finishes each chunk) and a
@@ -274,78 +272,111 @@ that wants text *while* the user is still speaking has to cut the audio itself a
 send each piece as a separate request, which is an application-level workaround,
 not a feature of this API.
 
-### Live audio input — `WebSocket /stt/stream`
+### Live dictation — `WebSocket /v1/realtime` (OpenAI Realtime)
 
-This is the other half: here the **request** streams. You push raw PCM while the
-person is still speaking and get text back phrase by phrase, without waiting for
-the recording to end.
+Here the **request** streams: you push audio while the person is still speaking
+and get text back as they go. The endpoint speaks the **OpenAI Realtime API in
+transcription mode** (GA wire protocol, `session.type = "transcription"`; the
+older beta event names are accepted too), so an existing client works by changing
+its base URL:
 
+```python
+from openai import AsyncOpenAI   # pip install "openai[realtime]"
+
+client = AsyncOpenAI(api_key=AUTH_TOKEN, base_url="http://localhost:9007/v1")
+async with client.realtime.connect(extra_query={"intent": "transcription"}) as conn:
+    await conn.session.update(session={
+        "type": "transcription",
+        "audio": {"input": {
+            "format": {"type": "audio/pcm", "rate": 24000},
+            "transcription": {"model": "v3_e2e_ctc", "language": "ru"},
+            "turn_detection": {"type": "server_vad", "silence_duration_ms": 600},
+        }},
+    })
+    await conn.input_audio_buffer.append(audio=base64_pcm16_24k)   # repeat while speaking
+    async for event in conn:
+        if event.type == "conversation.item.input_audio_transcription.delta":
+            print(event.delta, end="")
+        elif event.type == "conversation.item.input_audio_transcription.completed":
+            print("\nFINAL:", event.transcript)
 ```
-ws://localhost:9007/stt/stream?token=<AUTH_TOKEN>&language=ru
-```
 
-The client is deliberately dumb: it sends frames and decides nothing. Where a
-phrase ends, what counts as silence and what to discard is decided on the server
-by silero-vad — the same neural VAD that chunks uploaded files, so there is one
-implementation of that logic rather than two.
+**By default the endpoint behaves exactly as the standard says** — no extra
+events, no extra fields. Everything beyond the standard is an opt-in query
+parameter (see [Extensions](#extensions-opt-in)).
 
-Send raw **PCM s16le, 16 kHz, mono** as binary frames (any size; 50–200 ms is
-sensible). Compressed input is not accepted on purpose: it would need a decoder
-process per connection, while raw PCM costs 256 kbit/s and no CPU. Control
-messages are JSON: `{"type":"commit"}` closes the current phrase immediately,
-`{"type":"close"}` ends the session.
+| | |
+|---|---|
+| Auth | `Authorization: Bearer <AUTH_TOKEN>`; for browsers the standard subprotocol pair `["realtime", "openai-insecure-api-key.<AUTH_TOKEN>"]`; `?token=` also works. A bad or missing key fails the handshake with **HTTP 403**. Hitting the session limit is different on purpose: the socket opens, you get an `error` event (`rate_limit_exceeded`), then close code **1013** — "not allowed" versus "come back later". |
+| Audio | `input_audio_buffer.append` with base64 PCM16 LE mono, **24 kHz** as the standard requires (resampled on the server) or 16 kHz if the session format says `"rate": 16000`. No binary frames, no G.711. |
+| Client events | `session.update` (format, `transcription.model` / `language`, `turn_detection` with `threshold` and `silence_duration_ms`, or `null` to cut phrases only on `commit`), `input_audio_buffer.append` / `commit` / `clear`. Anything else (`response.create`, …) gets an `error` event and the socket stays open. |
+| Server events | `session.created`, `session.updated`, `input_audio_buffer.speech_started` / `speech_stopped` / `committed` / `cleared`, `conversation.item.added` / `.done`, `conversation.item.input_audio_transcription.delta` / `.completed`, `error`. Every event has an `event_id`. |
+| Model names | Any name: a model from `GIGAAM_MODELS` selects it, everything else (`whisper-1`, `gpt-4o-transcribe`, …) maps to the default model. |
+| End of session | There is no closing event in this protocol: send `input_audio_buffer.commit` to flush the last phrase, then close the socket. |
 
-The server replies with JSON events: `session.created`, `speech.started` /
-`speech.stopped`, `transcript.text.partial` (drafts, optional),
-`transcript.text.delta` for each finished phrase, `phrase.emotion` (optional), a
-final `transcript.text.done`, and `stream.overflow` if inference falls behind and
-the oldest queued phrase had to be dropped. The WebUI shows this raw event stream
-under the result («Сырые события сервера (JSON)»).
+**How phrases are cut.** The client decides nothing: silero-vad on the server —
+the same neural VAD that chunks uploaded files — finds where a phrase ends
+(`silence_duration_ms`, 600 ms by default), trims silence and drops clicks and
+coughs. Trimming silence also *improves* accuracy: long stretches of silence make
+the model produce filler.
 
-**Final text arrives per phrase.** GigaAM is an offline model — it needs a complete
-segment. Latency from the end of a phrase to its text is about a second on a CPU:
-~600 ms to confirm the pause plus inference (~0.3 s for a 5-second phrase; ~0.05 s
-on a GPU).
+**Speaking without pauses, for as long as you like.** The model takes a bounded
+segment, so an open phrase cannot grow forever — but it is not chopped by a
+timer either. Once a phrase is longer than `STREAM_SOFT_CUT_SEC` (12 s) it is
+closed **at the boundary of the last stabilised word**, preferably where a
+micro-pause follows it: everything up to that word becomes a finished item whose
+text is taken from the pass that saw context on both sides (so punctuation and
+case are right and no second pass is needed), and the rest keeps accumulating as
+the next item; if the cut fell mid-sentence, the next item continues in lower
+case. Words are never split, and the model window and the cost per tick stay
+constant. `STREAM_MAX_PHRASE_SEC` (20 s) remains only as a hard safety cut for
+the cases where nothing could be stabilised (drafts off, or pure noise).
 
-**Drafts while speaking (`partials`).** While a phrase is still open the server can
-re-decode everything accumulated in it every `STREAM_PARTIAL_INTERVAL_MS` (500 ms)
-and send `transcript.text.partial`. Each draft **replaces** the previous one, and
-the phrase's `transcript.text.delta` replaces the draft for good. This is cheap
-and deliberately unstabilised: the last word or a comma may change between ticks,
-so render drafts as provisional text. It also removes the long silence when
-someone talks without pausing (a phrase is otherwise only cut after 20 s). Drafts
-are always computed with the CTC model, even if the session uses RNNT. The
-default is `STREAM_PARTIALS=auto`: on when the model runs on a GPU, off on a CPU,
-where one 10-second window costs about a second; a client overrides it with
-`?partials=true|false`. Measured on a GTX 1050 Ti: the first draft ~1 s after
-speech starts, then one every 0.5 s at ~70 ms of inference each.
+**Long sessions.** A session holds audio only for the open phrase, the queue of
+phrases waiting for the final pass is bounded, and nothing accumulates per
+phrase, so memory does not grow with session length. A session that sends no
+client events for `STREAM_IDLE_TIMEOUT_SEC` (120 s) gets an `error` with code
+`session_idle_timeout` and is closed, so a hung client cannot hold a slot
+forever; silence in the microphone is not idleness — audio keeps flowing.
 
-**Emotions per phrase (`emotions=true`).** After the text of each finished phrase
-the server sends `phrase.emotion` (`seq` matches the delta, `dominant`,
-`emotions {label: prob}`) as a separate event, so text is never delayed by it.
-The emotion model loads on first use and runs on the CPU by default
-(`EMO_DEVICE=cpu|cuda|auto`): it is ~1 GB and does not fit next to two ASR models
-on a 4 GB card; on a large GPU set `EMO_DEVICE=cuda`.
+**What a `delta` is here.** GigaAM is an offline model — it needs a complete
+segment — so the authoritative text is per phrase (`completed`). To still show
+words while the person is speaking, the server re-decodes the open phrase every
+`STREAM_PARTIAL_INTERVAL_MS` (500 ms) and **stabilises** the result: a word is
+committed once it appears in two consecutive passes and is at least
+`STREAM_PARTIAL_GUARD_MS` (500 ms) away from the end of the audio. A delta in
+this protocol appends and cannot be taken back, so only committed words are sent
+as deltas. `completed.transcript` is authoritative: if the model revised words it
+had already sent — numbers being normalised («двадцать пять» → «25»), a name
+fixed by later context — deltas for that phrase stop and the client should
+replace the accumulated text with the transcript. Re-decoding costs one model
+pass per tick, so it is on only when the model runs on a GPU
+(`STREAM_PARTIALS=auto`); on a CPU a phrase arrives as a single delta with the
+whole text, like `whisper-1`. Measured on a GTX 1050 Ti: the first words ~1 s
+after speech starts, ~70 ms of inference per tick.
+
+#### Extensions (opt-in)
+
+Query parameters on the WebSocket URL; a standard client never sends them and
+never sees the extra events.
+
+| Parameter | Effect |
+|---|---|
+| `tentative=true` | Adds `x.transcription.tentative` `{item_id, committed, tentative, rewrite, changed_from}` on every draft tick: the committed text of the open phrase, its **unstable tail** (the part that may still change — render it as provisional), and whether committed words were just rewritten and from which word. |
+| `emotions=true` | Adds `phrase.emotion` `{item_id, dominant, emotions}` after each phrase's `completed`. The emotion model loads on first use and runs on the CPU by default (`EMO_DEVICE=cpu\|cuda\|auto`): ~1 GB does not fit next to two ASR models on a 4 GB card. |
+| `partials=true\|false` | Force word-by-word deltas on or off for this session, overriding `STREAM_PARTIALS`. |
+
+Not implemented: model responses (`response.*`), audio output, ephemeral client
+secrets.
 
 Measured cost on the reference CPU: an open session is **~0.5% of a core** for
-continuous voice detection plus ~2 MB of buffers, and inference runs only when a
-phrase closes — about **5% of a core** for one continuously speaking user. That is
-why the session limit (`STREAM_MAX_SESSIONS`, default 32) is much higher than the
-limit on concurrent file transcriptions (`MAX_PENDING_REQUESTS`, default 8): an
-open stream is nearly free, only phrase completions cost anything.
+continuous voice detection plus ~2 MB of buffers; one continuously speaking user
+costs about **5% of a core** without drafts. That is why the session limit
+(`STREAM_MAX_SESSIONS`, default 32) is much higher than the limit on concurrent
+file transcriptions (`MAX_PENDING_REQUESTS`, default 8).
 
-Silence is trimmed before inference. On a 137-second sample that cut the audio fed
-to the model from 137 s to 69 s and, unexpectedly, **improved** accuracy — long
-stretches of silence make the model produce filler.
-
-A bad token fails the handshake with **HTTP 403** and no socket is opened. Hitting
-the session limit is different on purpose: the socket opens, you get an `error`
-event with `retry: true`, then close code **1013** — so a client can tell "not
-allowed" from "come back later".
-
-Full protocol, including a runnable Python client, is at
-**`GET /stt/stream`** and in Swagger under the *Streaming* tag. It is a
-regular JSON endpoint because OpenAPI cannot describe a WebSocket.
+The full protocol is also available machine-readably at **`GET /v1/realtime`**
+and in Swagger under the *Streaming* tag (OpenAPI cannot describe a WebSocket).
 
 ### Microphone in the WebUI
 
@@ -354,7 +385,7 @@ different endpoints rather than variations of one:
 
 | Tab | Endpoint | Options it has |
 |---|---|---|
-| Живая диктовка *(default)* | `WS /stt/stream` | drafts while speaking (`partials`), emotions per phrase; VAD is always on |
+| Живая диктовка *(default)* | `WS /v1/realtime` | words while speaking (`partials`), and the two extensions: unstable tail (`tentative`) and emotions per phrase; VAD is always on |
 | Распознавание целиком | `POST /v1/audio/transcriptions` or `POST /stt/asr` | contract, response format, word timestamps, VAD chunking, `stream=true` (OpenAI only) |
 | Распознавание эмоций | `POST /stt/emotion` | none — no text is produced |
 
@@ -384,7 +415,10 @@ is stated as a fact rather than offered as a choice.
 
 Audio goes in through one block below the tabs: drop a file, click the frame to
 pick one, or press **🎙 Начать запись**. On the live tab the file half is disabled,
-since a WebSocket session takes a microphone rather than a file.
+since a WebSocket session takes a microphone rather than a file. With the
+«нестабильный хвост» extension the tail that may still change is grey, words the
+server rewrote are highlighted briefly, and the raw JSON events can be expanded
+under the result.
 
 ### Supported audio input formats
 

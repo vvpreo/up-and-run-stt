@@ -153,6 +153,9 @@
   .log-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* черновик незакрытой фразы: текст ещё может измениться */
   .draft { color: var(--muted); font-style: italic; }
+  /* слова, которые сервер переписал (перезапись зафиксированного или финал
+     разошёлся с черновиком) — короткая подсветка */
+  .flash { background: #e8c98a33; border-radius: 3px; box-shadow: 0 0 0 1px #e8c98a55; }
   .emo-tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border);
              border-radius: 5px; padding: 0 5px; margin: 0 4px 0 2px; white-space: nowrap; }
   .log-type.part { color: var(--muted); background: #8b98a51a; }
@@ -288,16 +291,19 @@
     <div class="pane" id="pane-live">
       <div class="slot" id="slot-live"></div>
       <div class="row">
-        <label class="toggle" title="Параметр partials: пока фраза не закрыта паузой, сервер раз в ~0.5 с перераспознаёт накопленное и шлёт черновик (transcript.text.partial). Черновик заменяется целиком и может меняться; финал фразы приходит как обычно. По умолчанию включено на GPU."><input type="checkbox" id="partialsOn"> Черновик по ходу речи</label>
-        <label class="toggle" id="liveEmoWrap" title="Параметр emotions=true: после текста каждой фразы сервер присылает её эмоцию отдельным событием phrase.emotion (модель GigaAMEmo)."><input type="checkbox" id="liveEmoOn"> Эмоции по фразам</label>
+        <label class="toggle" title="Параметр partials: пока фраза не закрыта паузой, сервер раз в ~0.5 с перераспознаёт накопленное и фиксирует слова, совпавшие в двух проходах подряд; они приходят стандартными дельтами. Выключено — на фразу одна дельта с целой фразой. По умолчанию включено на GPU."><input type="checkbox" id="partialsOn"> Слова по ходу речи</label>
+        <label class="toggle" title="Расширение ?tentative=true: событие x.transcription.tentative с нестабильным хвостом фразы (серым) и признаком перезаписи уже зафиксированных слов. В стандарте OpenAI такого события нет — стандартный клиент его не запрашивает и не видит."><input type="checkbox" id="tentativeOn"> Нестабильный хвост (расширение)</label>
+        <label class="toggle" id="liveEmoWrap" title="Расширение ?emotions=true: после текста каждой фразы сервер присылает её эмоцию отдельным событием phrase.emotion (модель GigaAMEmo)."><input type="checkbox" id="liveEmoOn"> Эмоции по фразам (расширение)</label>
       </div>
       <div class="grp-d">
-        Ручка <code>WS /stt/stream</code> — наша, <b>не</b> протокол OpenAI Realtime.
-        Аудио уходит сырым PCM по мере речи, сервер сам режет поток на фразы своим
-        VAD и присылает финальный текст каждой. VAD здесь не опция — без него
-        сегментатор не знает, где кончается фраза. Черновик — это текст ещё не
-        закрытой фразы (серым): он дешёвый и нестабильный, хвост может меняться.
-        Под результатом можно раскрыть сырой поток JSON-событий сервера.
+        Ручка <code>WS /v1/realtime</code> — протокол <b>OpenAI Realtime API</b> в режиме транскрипции:
+        сюда можно направить готовый клиент OpenAI, указав наш <code>base_url</code>. Аудио уходит как
+        <code>input_audio_buffer.append</code> (base64, PCM 24 кГц), сервер сам режет поток на фразы своим VAD.
+        Текст приходит <code>…transcription.delta</code> — только уже стабилизированными словами, потому что
+        дельту в этом протоколе нельзя отозвать, — и <code>…transcription.completed</code> с полным текстом
+        фразы. Без галочек-расширений поведение ровно стандартное. С «нестабильным хвостом» видно и то, что
+        ещё может измениться (серым); если сервер переписал уже зафиксированное (числа, имена), фраза
+        перерисовывается и изменение подсвечивается. Под результатом — сырой поток JSON-событий сервера.
       </div>
     </div>
 
@@ -345,7 +351,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'load-9';
+const UI_BUILD = 'rt-12';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -429,7 +435,7 @@ function renderHealth() {
     $('liveEmoWrap').hidden = !h.emotions_enabled;
     $('loadBox').hidden = h.stats_enabled === false;
     // Черновики по умолчанию — как на сервере: только когда модель на GPU
-    if (!partialsInit) { $('partialsOn').checked = h.device === 'cuda'; partialsInit = true; }
+    if (!partialsInit) { $('partialsOn').checked = $('tentativeOn').checked = h.device === 'cuda'; partialsInit = true; }
     $('docsLinks').hidden = !h.docs_enabled;
     if (!vadInit) { $('vadOn').checked = !!h.vad_chunking; vadInit = true; }
   }
@@ -654,7 +660,7 @@ function updateHint() {
   const on = t => `<b>${t}</b>`, off = t => `<span class="no">${t}</span>`;
   const rows = [];
   if (TAB === 'live') {
-    rows.push(`Ручка: ${on('WS /stt/stream')} · Вход: ${on('стримится')} по мере речи · Выход: ${on('фразы')} во время разговора.`);
+    rows.push(`Ручка: ${on('WS /v1/realtime')} (OpenAI Realtime) · Вход: ${on('стримится')} по мере речи · Выход: ${on('слова и фразы')} во время разговора.`);
     rows.push(`Формат ответа: ${off('нет, только текстовые дельты')} · Слова: ${off('нет')} · VAD: ${on('всегда включён')} · Только микрофон.`);
   } else if (TAB === 'emo') {
     rows.push(`Ручка: ${on('POST /stt/emotion')} · Отдельная модель GigaAMEmo, к распознаванию речи отношения не имеет.`);
@@ -739,16 +745,20 @@ async function startLive() {
     });
   } catch (e) { $('recStatus').textContent = 'нет доступа к микрофону: ' + e.message; return; }
 
+  // Протокол OpenAI Realtime (транскрипция). Параметры запроса — только наши
+  // расширения; без них сервер ведёт себя строго по стандарту.
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const params = new URLSearchParams();
-  const tok = TOKEN;
-  if (tok) params.set('token', tok);
+  const params = new URLSearchParams({ intent: 'transcription' });
   const mdl = $('model').value;
   if (mdl) params.set('model', mdl);
   params.set('partials', $('partialsOn').checked ? 'true' : 'false');
+  const useTentative = $('tentativeOn').checked && $('partialsOn').checked;
+  if (useTentative) params.set('tentative', 'true');
   if ($('liveEmoOn').checked && !$('liveEmoWrap').hidden) params.set('emotions', 'true');
-  const ws = new WebSocket(`${proto}://${location.host}/stt/stream?${params}`);
-  ws.binaryType = 'arraybuffer';
+  // Стандартный способ для браузера: ключ в subprotocol, а не в URL
+  const protos = ['realtime']; if (TOKEN) protos.push('openai-insecure-api-key.' + TOKEN);
+  const ws = new WebSocket(`${proto}://${location.host}/v1/realtime?${params}`, protos);
+  const RATE = 24000;   // Realtime API принимает PCM 24 кГц
 
   const empty = document.querySelector('#results .empty');
   if (empty) empty.remove();
@@ -768,6 +778,9 @@ async function startLive() {
   const logEl = card.querySelector('.stream-log');
   const rawEl = card.querySelector('.raw-log');
   const rawN = card.querySelector('.raw-n');
+  const statusEl = card.querySelector('#live-mic');
+  const metaEl = card.querySelector('.meta');
+  const t0 = performance.now();
   let rawCount = 0;
   // Сырой поток: каждое сообщение сервера как есть, одной строкой JSON.
   // Держим последние 1000 строк — черновики идут дважды в секунду.
@@ -779,15 +792,11 @@ async function startLive() {
     rawEl.scrollTop = rawEl.scrollHeight;
     rawN.textContent = ++rawCount;
   };
-  const statusEl = card.querySelector('#live-mic');
-  const metaEl = card.querySelector('.meta');
-  const t0 = performance.now();
-
   const log = (type, msg) => {
     const line = document.createElement('div');
     line.className = 'log-line';
     const cls = type === 'delta' ? 'delta' : type === 'done' ? 'done'
-      : type === 'emotion' ? 'emo' : type === 'open' ? 'part' : 'err';
+      : type === 'emotion' ? 'emo' : (type === 'open' || type === 'rewrite') ? 'part' : 'err';
     line.innerHTML = `<span class="log-t">${((performance.now() - t0) / 1000).toFixed(2)} с</span>` +
       `<span class="log-type ${cls}">${esc(type)}</span><span class="log-text">${esc(msg)}</span>`;
     logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
@@ -796,69 +805,119 @@ async function startLive() {
   const ctx = new AudioContext();
   const src = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
-  const parts = [];     // закрытые фразы: {seq, text, emo}
-  let draft = '';       // черновик текущей незакрытой фразы
+  const parts = [];     // закрытые фразы: {text, emo, flashFrom, flashUntil}
+  const byItem = {};    // item_id -> объект фразы (для эмоций)
+  // Открытая фраза: зафиксированные слова (обычным текстом) и нестабильный
+  // хвост (серым). flashFrom/flashUntil — подсветка переписанных слов.
+  const open = { committed: '', tentative: '', flashFrom: null, flashUntil: 0 };
+  const FLASH_MS = 1800;
   const EMO_RU = { angry: 'злость', sad: 'грусть', neutral: 'нейтрально', positive: 'позитив' };
-  const render = () => {
+  // Текст с подсветкой слов начиная с индекса from (пока не истекло until)
+  const words = (text, from, until) => {
+    if (from == null || performance.now() > until) return esc(text);
+    const w = text.split(' ');
+    return esc(w.slice(0, from).join(' ')) + (from ? ' ' : '') +
+      `<span class="flash">${esc(w.slice(from).join(' '))}</span>`;
+  };
+  let flashTimer = null;
+  const flash = (obj, from) => {
+    obj.flashFrom = from; obj.flashUntil = performance.now() + FLASH_MS;
+    clearTimeout(flashTimer); flashTimer = setTimeout(render, FLASH_MS + 50);
+  };
+  function render() {
     textEl.innerHTML = parts.map(p =>
-      esc(p.text) + (p.emo ? ` <span class="emo-tag">${esc(p.emo)}</span>` : '')
-    ).join(' ') + (draft ? ` <span class="draft">${esc(draft)}</span>` : '');
+      words(p.text, p.flashFrom, p.flashUntil) + (p.emo ? ` <span class="emo-tag">${esc(p.emo)}</span>` : '')
+    ).join(' ') +
+      (open.committed ? ' ' + words(open.committed, open.flashFrom, open.flashUntil) : '') +
+      (open.tentative ? ` <span class="draft">${esc(open.tentative)}</span>` : '');
+  }
+  const resetOpen = () => { open.committed = ''; open.tentative = ''; open.flashFrom = null; };
+  const normW = w => w.toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}]+/gu, '');
+  const firstDiff = (before, after) => {          // индекс первого изменившегося слова или null
+    const a = before.split(' ').filter(Boolean).map(normW), b = after.split(' ').filter(Boolean).map(normW);
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return i;
+    return null;
   };
   live = { ws, ctx, stream, node, src, startedAt: Date.now() };
 
   ws.onopen = () => { statusEl.innerHTML = '<span class="spin"></span>говорите…'; };
 
+  const T = 'conversation.item.input_audio_transcription.';
   ws.onmessage = ev => {
     raw(ev.data);
     const e = JSON.parse(ev.data);
-    if (e.type === 'transcript.text.partial') {
-      draft = e.text; render();
-    } else if (e.type === 'transcript.text.delta') {
-      parts.push({ seq: e.seq, text: e.delta, emo: '' });
-      draft = ''; render();
-      log('delta', `${e.duration}s → ${e.delta}`);
+    if (e.type === 'session.created') {
+      log('open', `сессия ${e.session?.id || ''}`);
+      ws.send(JSON.stringify({ type: 'session.update', session: {
+        type: 'transcription',
+        audio: { input: {
+          format: { type: 'audio/pcm', rate: RATE },
+          transcription: { model: mdl || 'whisper-1', language: 'ru' },
+          turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 600 },
+        } },
+      } }));
+    } else if (e.type === 'session.updated') {
+      const i = e.session?.audio?.input || {};
+      log('open', `${i.transcription?.model} · ${i.format?.rate} Гц · пауза ${i.turn_detection?.silence_duration_ms} мс` +
+        (useTentative ? ' · расширение tentative' : ''));
+    } else if (e.type === 'x.transcription.tentative') {
+      // Расширение: сервер сам говорит, что зафиксировано, что ещё может
+      // измениться и было ли зафиксированное переписано.
+      open.committed = e.committed; open.tentative = e.tentative;
+      if (e.rewrite) { flash(open, e.changed_from ?? 0); log('rewrite', `с ${e.changed_from}-го слова: ${e.committed}`); }
+      render();
+    } else if (e.type === T + 'delta') {
+      // Стандартная дельта дописывает текст. С расширением то же самое уже
+      // пришло в committed — второй раз не добавляем.
+      if (!useTentative) { open.committed += e.delta; render(); }
+    } else if (e.type === T + 'completed') {
+      if (!e.transcript) { resetOpen(); render(); return; }
+      const p = { text: e.transcript, emo: '', flashFrom: null, flashUntil: 0 };
+      // completed авторитетен: если он разошёлся с показанным — подсветить
+      const d = firstDiff(open.committed.trim(), e.transcript);
+      if (d != null) { flash(p, d); log('rewrite', `финал изменил фразу с ${d}-го слова`); }
+      byItem[e.item_id] = p; parts.push(p);
+      resetOpen(); render();
+      log('delta', `${(e.usage?.seconds ?? 0).toFixed(2)}s → ${e.transcript}`);
     } else if (e.type === 'phrase.emotion') {
-      const p = parts.find(x => x.seq === e.seq);
+      const p = byItem[e.item_id];
       const label = `${EMO_RU[e.dominant] || e.dominant} ${Math.round((e.emotions?.[e.dominant] ?? 0) * 100)}%`;
       if (p) { p.emo = label; render(); }
-      log('emotion', `#${e.seq} ${label}`);
-    } else if (e.type === 'speech.started') {
+      log('emotion', label);
+    } else if (e.type === 'input_audio_buffer.speech_started') {
       statusEl.innerHTML = '<span class="spin"></span>речь…';
-    } else if (e.type === 'speech.stopped') {
+    } else if (e.type === 'input_audio_buffer.speech_stopped') {
       statusEl.innerHTML = '<span class="spin"></span>пауза…';
-    } else if (e.type === 'stream.overflow') {
-      log('error', 'сервер не успевает: старая фраза отброшена');
     } else if (e.type === 'error') {
-      log('error', e.error);
-    } else if (e.type === 'transcript.text.done') {
-      draft = ''; render();
-      statusEl.remove();
-      metaEl.textContent = `живая диктовка · ${e.phrases} фраз · сессия ${e.session_sec} с`;
-      log('done', `${e.phrases} фраз`);
-    } else if (e.type === 'session.created') {
-      log('open', `${e.model} · ${e.sample_rate} Гц · пауза ${e.silence_ms} мс` +
-        (e.partials ? ` · черновики каждые ${e.partial_interval_ms} мс (${e.partial_model})` : ' · без черновиков') +
-        (e.emotions ? ' · эмоции' : ''));
+      // пустой commit при остановке — не ошибка для пользователя
+      if (e.error?.code !== 'input_audio_buffer_commit_empty') log('error', e.error?.message || 'error');
     }
   };
 
   ws.onclose = ev => {
-    if (ev.code === 1008) { showGate('Сессия истекла — введите токен заново'); }
+    if (ev.code === 1008 || ev.code === 1006 && !rawCount) { showGate('Сессия истекла — введите токен заново'); }
     else if (ev.code === 1013) { log('error', 'сервер занят: лимит одновременных сессий'); }
+    // В этом протоколе нет итогового события — сессию завершает закрытие сокета
+    resetOpen(); render(); statusEl.remove();
+    metaEl.textContent = `живая диктовка · ${parts.length} фраз · сессия ${((performance.now() - t0) / 1000).toFixed(1)} с`;
+    log('done', `${parts.length} фраз`);
     stopLive(true);
   };
   ws.onerror = () => log('error', 'ошибка WebSocket');
 
-  // Ресемплинг на лету: AudioContext обычно 48 кГц, сервер ждёт ровно 16 000
+  // Ресемплинг на лету: AudioContext обычно 48 кГц, протокол ждёт 24 000
   node.onaudioprocess = ev => {
     if (ws.readyState !== WebSocket.OPEN) return;
-    const f32 = downsample(ev.inputBuffer.getChannelData(0), ctx.sampleRate, 16000);
+    const f32 = downsample(ev.inputBuffer.getChannelData(0), ctx.sampleRate, RATE);
     const i16 = new Int16Array(f32.length);
     for (let i = 0; i < f32.length; i++) {
       const s = Math.max(-1, Math.min(1, f32[i]));
       i16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-    ws.send(i16.buffer);
+    // input_audio_buffer.append: PCM16 в base64 внутри JSON
+    const u8 = new Uint8Array(i16.buffer); let bin = '';
+    for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: btoa(bin) }));
   };
   const mute = ctx.createGain(); mute.gain.value = 0;
   src.connect(node); node.connect(mute); mute.connect(ctx.destination);
@@ -878,8 +937,11 @@ function stopLive(fromClose) {
   live = null;
   clearInterval(timerId);
   try { node.disconnect(); src.disconnect(); stream.getTracks().forEach(t => t.stop()); ctx.close(); } catch (e) {}
-  // Просим сервер добить хвост последней фразы и прислать итог
-  if (!fromClose && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'close' }));
+  if (!fromClose && ws.readyState === WebSocket.OPEN) {
+    // Закрыть текущую фразу и дать серверу время прислать completed
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+    setTimeout(() => { try { ws.close(1000); } catch (e) {} }, 2500);
+  }
   $('recBtn').textContent = '🎙 Начать запись'; $('recBtn').className = 'primary';
   $('timer').hidden = true; $('recStatus').textContent = '';
 }

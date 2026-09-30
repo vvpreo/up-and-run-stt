@@ -30,7 +30,7 @@ from src.routes import (
     emotion_router,
     health_router,
     openai_router,
-    stream_router,
+    realtime_router,
 )
 from src.routes.openai_compat import router as openai_compat_router
 from src.routes.asr import set_asr_model as set_asr_model_asr
@@ -132,7 +132,7 @@ def create_app() -> FastAPI:
             "Endpoints:\n"
             "- **/v1/audio/transcriptions** — OpenAI-compatible (drop-in Whisper API replacement)\n"
             "- **/stt/asr** — native endpoint with extended response (segments, metrics)\n"
-            "- **/stt/stream** — WebSocket for live audio (see below)\n\n"
+            "- **/v1/realtime** — WebSocket for live dictation, OpenAI Realtime API (transcription)\n\n"
             "The instance serves the model set from GIGAAM_MODELS; a specific "
             "model is selected per request via the `model` field.\n\n"
             "### Two different things are called streaming here\n\n"
@@ -141,14 +141,15 @@ def create_app() -> FastAPI:
             "request; only the text comes back incrementally, as SSE deltas. "
             "Use it when you already have the file and want the first words "
             "early. This matches OpenAI's own `stream=true`.\n\n"
-            "**Streaming the request** — the WebSocket at `/stt/stream`. "
-            "You push raw PCM while the person is still speaking and get text "
-            "back phrase by phrase, without waiting for the recording to end. "
-            "Use it for live dictation. `GET /stt/stream` returns the full "
-            "protocol; OpenAPI cannot describe the WebSocket itself.\n\n"
-            "Note that the model is offline: it needs a complete segment to "
-            "transcribe, so even in the live mode results arrive per phrase, "
-            "never word by word."
+            "**Streaming the request** — the WebSocket at `/v1/realtime`, the "
+            "OpenAI Realtime API in transcription mode. You push audio while "
+            "the person is still speaking and get text back as stabilised "
+            "words and a final transcript per phrase. `GET /v1/realtime` "
+            "returns the full protocol; OpenAPI cannot describe the WebSocket "
+            "itself.\n\n"
+            "The model is offline — it needs a complete segment — so the final "
+            "text is per phrase; words shown earlier are drafts stabilised by "
+            "agreement between consecutive passes."
         ),
         version=__version__,
         lifespan=lifespan,
@@ -174,8 +175,9 @@ def create_app() -> FastAPI:
     app.include_router(openai_router)
     app.include_router(openai_compat_router)
     app.include_router(emotion_router)
-    app.include_router(stream_router)
+    app.include_router(realtime_router)
     from src.routes.stats import router as stats_router
+
 
     app.include_router(stats_router)
 

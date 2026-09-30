@@ -12,7 +12,7 @@ from fastapi import APIRouter
 from src import __version__
 from src.asr.registry import list_models
 from src.asr.vad import silero_vad
-from src.routes.stream import active_sessions as active_stream_sessions
+from src.services.live_session import active_sessions as active_stream_sessions
 from src.config import (
     APP_ENV,
     AUTH_TOKEN,
@@ -126,7 +126,7 @@ async def health_check() -> dict:
         "stats_enabled": ENABLE_STATS,
         # VAD-чанкование: дефолт сервера (переопределяется per-request)
         "vad_chunking": VAD_CHUNKING and silero_vad.available(),
-        # Живые WebSocket-сессии потокового приёма аудио (/stt/stream).
+        # Живые WebSocket-сессии живой диктовки (/v1/realtime).
         # Считается отдельно от pending_requests: открытая сессия почти
         # ничего не стоит, дорог только инференс на закрытии фразы.
         "stream_sessions": active_stream_sessions(),
