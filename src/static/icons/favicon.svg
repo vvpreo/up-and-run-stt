@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- up-and-run-stt: робот слушает. ПРОД-исходник, единственный источник правды.
+       Варианты для dev/test/uat (цветная рамка) генерируются из него:
+       scripts/gen_icons.py и src/utils/icons.py. Руками их не рисовать. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#24364f"/>
+      <stop offset="1" stop-color="#10141a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- звук, приходящий в ухо -->
+  <g fill="none" stroke="#4da3ff" stroke-width="24" stroke-linecap="round">
+    <path d="M132 224 a68 68 0 0 0 0 112"/>
+    <path d="M106 186 a120 120 0 0 0 0 188" opacity=".55"/>
+  </g>
+  <!-- антенна -->
+  <rect x="309" y="98" width="18" height="60" rx="9" fill="#e8edf4"/>
+  <circle cx="318" cy="92" r="24" fill="#3ecf8e"/>
+  <!-- уши: левое — «слушающее», акцентное -->
+  <rect x="158" y="222" width="54" height="116" rx="22" fill="#4da3ff"/>
+  <rect x="424" y="240" width="38" height="80" rx="16" fill="#93a1b3"/>
+  <!-- голова -->
+  <rect x="190" y="150" width="256" height="250" rx="60" fill="#e8edf4"/>
+  <!-- глаза -->
+  <circle cx="268" cy="258" r="34" fill="#10141a"/>
+  <circle cx="368" cy="258" r="34" fill="#10141a"/>
+  <circle cx="276" cy="250" r="12" fill="#4da3ff"/>
+  <circle cx="376" cy="250" r="12" fill="#4da3ff"/>
+  <!-- рот: строка текста -->
+  <rect x="262" y="328" width="112" height="22" rx="11" fill="#10141a"/>
+</svg>

@@ -95,6 +95,9 @@ class PhraseSegmenter:
         self._consumed = 0                    # сэмплов от начала сессии
 
         self.is_speaking = False              # для событий speech.started/stopped
+        # Номер текущей (ещё не закрытой) фразы. Растёт при каждом закрытии —
+        # по нему черновик, посчитанный для уже закрытой фразы, отбрасывается.
+        self.phrase_id = 0
 
     # ------------------------------------------------------------------ вход
 
@@ -154,6 +157,23 @@ class PhraseSegmenter:
 
     # ----------------------------------------------------------------- выход
 
+    @property
+    def consumed(self) -> int:
+        """Сколько сэмплов принято с начала сессии (для «есть ли новое аудио»)."""
+        return self._consumed
+
+    def snapshot(self) -> Optional[tuple]:
+        """
+        Снимок текущей незакрытой фразы для черновика: (audio, start_sec) или
+        None, если речи в буфере ещё не было. Буфер не трогает — фраза
+        продолжает копиться и закроется как обычно.
+        """
+        if not self._saw_speech or not self._buffer:
+            return None
+        audio = np.concatenate(self._buffer)
+        start = (self._consumed - len(audio)) / SAMPLE_RATE
+        return audio, max(0.0, start)
+
     def flush(self) -> Optional[Phrase]:
         """Хвост, оставшийся при закрытии соединения (если в нём есть речь)."""
         if self._partial.size:
@@ -195,6 +215,7 @@ class PhraseSegmenter:
         )
 
     def _reset_buffer(self) -> None:
+        self.phrase_id += 1
         self._buffer = []
         self._buffered = 0
         self._silence_ms_acc = 0.0

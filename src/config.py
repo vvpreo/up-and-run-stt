@@ -81,6 +81,21 @@ STREAM_MAX_SESSIONS = int(os.getenv("STREAM_MAX_SESSIONS", "32"))
 # лучше потерять кусок, чем расти по памяти без предела.
 STREAM_MAX_QUEUED_PHRASES = int(os.getenv("STREAM_MAX_QUEUED_PHRASES", "4"))
 
+# --- Черновики внутри фразы (transcript.text.partial) ----------------------
+# Пока фраза не закрыта паузой, сервер раз в STREAM_PARTIAL_INTERVAL_MS
+# перераспознаёт всё, что в ней накоплено, и шлёт результат как черновик:
+# он целиком заменяет предыдущий, а финальный текст фразы заменяет его
+# окончательно. Это «дешёвые слова по ходу речи»: без стабилизации, хвост
+# может меняться. Стоимость — один прогон модели на тик, поэтому режим имеет
+# смысл только на GPU: на CPU окно 10 с считается около секунды.
+#   auto  — включено, если модель работает на CUDA (по умолчанию);
+#   true / false — принудительно. Клиент переопределяет query-параметром
+#   `partials=true|false`.
+STREAM_PARTIALS = os.getenv("STREAM_PARTIALS", "auto").lower()
+STREAM_PARTIAL_INTERVAL_MS = int(os.getenv("STREAM_PARTIAL_INTERVAL_MS", "500"))
+# Сколько аудио должно накопиться во фразе до первого черновика
+STREAM_PARTIAL_MIN_SEC = float(os.getenv("STREAM_PARTIAL_MIN_SEC", "0.6"))
+
 # Chunk size (seconds) used when splitting long audio into fixed-size chunks for repeated
 # calls to `model.transcribe()`. Configure via env vars:
 #   - GIGAAM_CHUNK_SEC: preferred chunk size in seconds (default: 30)
@@ -113,6 +128,12 @@ SAMPLE_RATE = 16000
 # Default language for transcription (used when not specified via API)
 # Set to None or empty string to use auto-detection
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "ru")
+
+# Стенд, на котором работает этот экземпляр: prod | dev | test | uat.
+# Влияет только на иконку приложения (favicon и пр.): на непродовых стендах
+# она получает цветную рамку, чтобы вкладку нельзя было спутать с продом
+# (см. src/utils/icons.py). Образ один на все стенды; по умолчанию prod.
+APP_ENV = os.getenv("APP_ENV", "prod")
 
 # =============================================================================
 # Server Configuration

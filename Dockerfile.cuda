@@ -62,6 +62,14 @@ RUN uv sync --frozen --no-dev --no-install-project \
     && uv pip uninstall onnxruntime \
     && uv pip install ${ORT_INDEX_URL:+--index-url "$ORT_INDEX_URL"} "onnxruntime-gpu==${ORT_GPU_VERSION}"
 
+# Иконки приложения для всех стендов (prod без маркера, dev/test/uat с рамкой)
+# генерируются из прод-исходника здесь, на стадии сборки: рендерер SVG нужен
+# только тут и в рантайм-образ не попадает.
+COPY scripts/gen_icons.py scripts/gen_icons.py
+COPY src/utils/icons.py src/utils/icons.py
+COPY src/static/icons/favicon.svg src/static/icons/favicon.svg
+RUN uv run --no-project --with resvg-py==0.5.0 python scripts/gen_icons.py --out /app/icons
+
 # ============================ runtime =================================
 FROM ${CUDA_IMAGE}
 
@@ -123,6 +131,7 @@ RUN mkdir -p /app/vad \
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app src/ /app/src/
 COPY --chown=app:app main.py /app/
+COPY --from=builder --chown=app:app /app/icons /app/src/static/icons/generated
 
 RUN mkdir -p /app/data && chown app:app /app/data && chmod 755 /app/data
 

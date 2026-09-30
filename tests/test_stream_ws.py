@@ -42,10 +42,13 @@ def pcm16(sample_path, tmp_path_factory):
     return out.read_bytes()
 
 
-async def _stream(url, token, pcm, *, chunk_ms=100, realtime=False, commit=False):
+async def _stream(url, token, pcm, *, chunk_ms=100, realtime=False, commit=False, query=None):
     """Прогнать PCM через сокет и собрать события сервера."""
+    params = dict(query or {})
     if token:
-        url = f"{url}?token={token}"
+        params["token"] = token
+    if params:
+        url = f"{url}?" + "&".join(f"{k}={v}" for k, v in params.items())
     events = []
     async with websockets.connect(url, max_size=None) as ws:
         step = 16000 * 2 * chunk_ms // 1000  # байт на кадр
@@ -196,3 +199,81 @@ def test_health_reports_stream_sessions(base_url):
     assert "stream_sessions" in health
     assert "stream_max_sessions" in health
     assert health["stream_sessions"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# Черновики незакрытой фразы (transcript.text.partial) и эмоции по фразам
+# ---------------------------------------------------------------------------
+
+
+def test_partials_arrive_while_phrase_is_open(ws_url, token, pcm16):
+    """
+    partials=true: пока фраза не закрыта, сервер шлёт черновики. Подача в
+    реальном времени обязательна — черновик считается по таймеру, и при
+    мгновенной подаче фразы закрывались бы раньше первого тика.
+    """
+    events = asyncio.run(
+        _stream(ws_url, token, pcm16, realtime=True, query={"partials": "true"})
+    )
+    created = events[0]
+    assert created["type"] == "session.created"
+    assert created["partials"] is True
+    assert created["partial_interval_ms"] > 0
+
+    partials = [e for e in events if e["type"] == "transcript.text.partial"]
+    assert partials, "ни одного черновика за 20 с речи"
+    assert all(p["text"].strip() for p in partials), "пустой черновик"
+
+    # Черновик относится к ещё не закрытой фразе: её номер = число уже
+    # пришедших дельт + 1. Черновик закрытой фразы после её финала — баг
+    # (он лёг бы поверх финального текста).
+    seen_deltas = 0
+    for e in events:
+        if e["type"] == "transcript.text.delta":
+            seen_deltas += 1
+        elif e["type"] == "transcript.text.partial":
+            assert e["phrase"] == seen_deltas + 1, (e, seen_deltas)
+
+    # Финальный текст по-прежнему собирается только из дельт
+    deltas = [e for e in events if e["type"] == "transcript.text.delta"]
+    assert deltas and events[-1]["phrases"] == len(deltas)
+
+
+def test_partials_can_be_switched_off(ws_url, token, pcm16):
+    """partials=false: протокол ровно прежний, черновиков нет."""
+    events = asyncio.run(
+        _stream(ws_url, token, pcm16, realtime=True, query={"partials": "false"})
+    )
+    assert events[0]["partials"] is False
+    assert not [e for e in events if e["type"] == "transcript.text.partial"]
+    assert [e for e in events if e["type"] == "transcript.text.delta"]
+
+
+def test_phrase_emotions_on_request(base_url, ws_url, token, pcm16):
+    """emotions=true: после текста фразы приходит её эмоция отдельным событием."""
+    if not requests.get(f"{base_url}/health", timeout=10).json().get("emotions_enabled"):
+        pytest.skip("emotions are disabled on this instance")
+
+    events = asyncio.run(
+        _stream(ws_url, token, pcm16, query={"emotions": "true", "partials": "false"})
+    )
+    assert events[0]["emotions"] is True
+    assert events[-1]["type"] == "transcript.text.done"
+
+    delta_seqs = [e["seq"] for e in events if e["type"] == "transcript.text.delta"]
+    emos = [e for e in events if e["type"] == "phrase.emotion"]
+    assert emos, "эмоции запрошены, но не пришли"
+    for e in emos:
+        assert e["seq"] in delta_seqs
+        assert e["dominant"] in e["emotions"]
+        assert abs(sum(e["emotions"].values()) - 1.0) < 0.05
+    # Эмоция не обгоняет текст своей фразы
+    order = [(e["type"], e.get("seq")) for e in events]
+    for e in emos:
+        assert order.index(("transcript.text.delta", e["seq"])) < order.index(("phrase.emotion", e["seq"]))
+
+
+def test_emotions_are_off_by_default(ws_url, token, pcm16):
+    events = asyncio.run(_stream(ws_url, token, pcm16))
+    assert events[0]["emotions"] is False
+    assert not [e for e in events if e["type"] == "phrase.emotion"]

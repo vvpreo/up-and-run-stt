@@ -9,8 +9,13 @@
 Клиент намеренно тупой: шлёт кадры и ничего не решает. Вся сегментация —
 на сервере, нейросетевым silero-vad (см. services/stream_session.py).
 
-Промежуточных гипотез внутри фразы нет и быть не может: GigaAM офлайновая,
-она принимает законченный отрезок. Гранулярность результата = фраза.
+Финальный результат — по фразам: GigaAM офлайновая, ей нужен законченный
+отрезок. Поверх этого есть дешёвые черновики (transcript.text.partial): пока
+фраза не закрыта, сервер раз в полсекунды перераспознаёт накопленное и шлёт
+текст, который целиком заменяет предыдущий черновик; финал фразы заменяет его
+окончательно. Это не стабилизированный стриминг — хвост черновика меняется, —
+зато пользователь видит слова по ходу речи. По умолчанию включено только на
+GPU (см. STREAM_PARTIALS).
 """
 
 import asyncio
@@ -22,7 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from src.asr.registry import resolve_model
+from src.asr.registry import list_models, resolve_model
 from src.config import (
     AUTH_TOKEN,
     DEFAULT_LANGUAGE,
@@ -31,6 +36,9 @@ from src.config import (
     STREAM_MAX_QUEUED_PHRASES,
     STREAM_MAX_SESSIONS,
     STREAM_MIN_PHRASE_SEC,
+    STREAM_PARTIAL_INTERVAL_MS,
+    STREAM_PARTIAL_MIN_SEC,
+    STREAM_PARTIALS,
     STREAM_SILENCE_MS,
 )
 from src.services.stream_session import PhraseSegmenter, pcm16_to_float32
@@ -69,12 +77,41 @@ def active_sessions() -> int:
     return _sessions
 
 
+def _partial_model(selected):
+    """
+    Модель для черновиков. Всегда CTC, если она есть на инстансе: черновик
+    считается каждые полсекунды, а RNNT-декодер (покадровый цикл на CPU) в
+    разы дороже при том же энкодере. Финал фразы считает выбранная модель.
+    """
+    models = list_models()
+    for name in ("v3_e2e_ctc", "v3_ctc"):
+        if name in models:
+            return models[name]
+    return selected
+
+
+def _partials_enabled(requested: Optional[bool], model) -> bool:
+    """Явный параметр клиента > STREAM_PARTIALS > auto (только на CUDA)."""
+    if requested is not None:
+        return requested
+    if STREAM_PARTIALS in ("true", "1", "yes"):
+        return True
+    if STREAM_PARTIALS in ("false", "0", "no"):
+        return False
+    try:
+        return model.get_info().get("device") == "cuda"
+    except Exception:
+        return False
+
+
 @router.websocket("/stt/stream")
 async def audio_stream(
     websocket: WebSocket,
     token: Optional[str] = Query(None),
     model: Optional[str] = Query(None),
     language: Optional[str] = Query(None),
+    partials: Optional[bool] = Query(None),
+    emotions: bool = Query(False),
 ) -> None:
     """
     Живой поток аудио -> пофразный текст. Протокол описан в GET /stt/stream.
@@ -126,6 +163,18 @@ async def audio_stream(
     queue: asyncio.Queue = asyncio.Queue()
     seq = 0
     text_parts: list[str] = []
+    draft_model = _partial_model(selected)
+    partials_on = _partials_enabled(partials, draft_model)
+    # Эмоции по фразам — по запросу клиента и только если фича включена на
+    # сервере. Считаются ПОСЛЕ отправки текста фразы отдельным событием
+    # phrase.emotion, чтобы не задерживать текст.
+    from src.routes.emotion import emotions_available
+
+    emotions_on = bool(emotions) and emotions_available()
+    emotion_tasks: set = set()
+    # Финал фразы в работе: черновики в это время не считаются, чтобы не
+    # занимать модель и не обгонять финал предыдущей фразы.
+    final_busy = False
 
     await websocket.send_json(
         {
@@ -136,16 +185,41 @@ async def audio_stream(
             "format": "pcm_s16le",
             "silence_ms": STREAM_SILENCE_MS,
             "max_phrase_sec": STREAM_MAX_PHRASE_SEC,
+            "partials": partials_on,
+            "partial_interval_ms": STREAM_PARTIAL_INTERVAL_MS if partials_on else None,
+            "partial_model": getattr(draft_model, "model_name", None) if partials_on else None,
+            "emotions": emotions_on,
         }
     )
 
+    async def emotion_for(phrase, phrase_seq: int) -> None:
+        from src.asr.onnx_emo import emo_model
+
+        t0 = time.perf_counter()
+        try:
+            probs = await asyncio.to_thread(emo_model.classify, phrase.audio)
+            await websocket.send_json(
+                {
+                    "type": "phrase.emotion",
+                    "seq": phrase_seq,
+                    "dominant": max(probs, key=probs.get),
+                    "emotions": {k: round(float(v), 4) for k, v in probs.items()},
+                    "inference_sec": round(time.perf_counter() - t0, 3),
+                }
+            )
+        except ValueError:
+            pass  # слишком короткий фрагмент — эмоцию не определить
+        except Exception:
+            logger.exception("[stream] phrase emotion failed")
+
     async def transcribe_worker() -> None:
-        nonlocal seq
+        nonlocal seq, final_busy
         while True:
             phrase = await queue.get()
             if phrase is None:
                 queue.task_done()
                 return
+            final_busy = True
             t0 = time.perf_counter()
             try:
                 result = await asyncio.to_thread(
@@ -161,6 +235,7 @@ async def audio_stream(
                 logger.exception("[stream] phrase transcription failed")
                 await websocket.send_json({"type": "error", "error": str(e)})
                 queue.task_done()
+                final_busy = False
                 continue
 
             if text:
@@ -177,9 +252,65 @@ async def audio_stream(
                         "forced": phrase.forced,
                     }
                 )
+                if emotions_on:
+                    task = asyncio.create_task(emotion_for(phrase, seq))
+                    emotion_tasks.add(task)
+                    task.add_done_callback(emotion_tasks.discard)
             queue.task_done()
+            final_busy = False
+
+    async def partial_worker() -> None:
+        """
+        Черновики текущей фразы. Раз в интервал берёт снимок незакрытой
+        фразы и распознаёт его целиком; результат заменяет прошлый черновик.
+        Финалы важнее: если фраза в очереди или в работе, тик пропускается.
+        Черновик, досчитанный уже после закрытия своей фразы, выбрасывается
+        (иначе он появился бы поверх финального текста).
+        """
+        interval = STREAM_PARTIAL_INTERVAL_MS / 1000
+        min_samples = int(STREAM_PARTIAL_MIN_SEC * SAMPLE_RATE)
+        last_consumed = -1
+        while True:
+            await asyncio.sleep(interval)
+            if final_busy or not queue.empty():
+                continue
+            snap = segmenter.snapshot()
+            if snap is None:
+                continue
+            audio, start = snap
+            if len(audio) < min_samples or segmenter.consumed == last_consumed:
+                continue
+            phrase_id = segmenter.phrase_id
+            last_consumed = segmenter.consumed
+            t0 = time.perf_counter()
+            try:
+                result = await asyncio.to_thread(
+                    draft_model.transcribe, audio, "transcribe", lang, False, "text"
+                )
+            except Exception:
+                logger.exception("[stream] partial transcription failed")
+                continue
+            if segmenter.phrase_id != phrase_id or final_busy:
+                continue  # фраза уже закрылась — её покажет финал
+            text = (result if isinstance(result, str) else result.text).strip()
+            if not text:
+                continue
+            try:
+                await websocket.send_json(
+                    {
+                        "type": "transcript.text.partial",
+                        "text": text,
+                        "phrase": seq + 1,
+                        "start": round(start, 2),
+                        "duration": round(len(audio) / SAMPLE_RATE, 2),
+                        "inference_sec": round(time.perf_counter() - t0, 3),
+                    }
+                )
+            except Exception:
+                return  # сокет закрыт
 
     worker = asyncio.create_task(transcribe_worker())
+    partial_task = asyncio.create_task(partial_worker()) if partials_on else None
     speaking = False
 
     try:
@@ -245,6 +376,8 @@ async def audio_stream(
     except Exception:
         logger.exception("[stream] session failed")
     finally:
+        if partial_task is not None:
+            partial_task.cancel()
         # Хвост последней фразы — иначе последние слова пропали бы
         try:
             if (tail := segmenter.flush()) is not None:
@@ -257,6 +390,12 @@ async def audio_stream(
             await asyncio.wait_for(worker, timeout=60)
         except (asyncio.TimeoutError, Exception):
             worker.cancel()
+        # Эмоции последних фраз должны успеть уйти до transcript.text.done
+        if emotion_tasks:
+            try:
+                await asyncio.wait_for(asyncio.gather(*emotion_tasks, return_exceptions=True), timeout=30)
+            except (asyncio.TimeoutError, Exception):
+                pass
 
         try:
             await websocket.send_json(
@@ -319,9 +458,15 @@ simpler and faster.
 ### How it works
 
 You send raw PCM frames; the server runs silero-vad over them, decides where
-phrases end, and transcribes each finished phrase. **There are no partial
-hypotheses inside a phrase** — GigaAM is an offline model and needs a complete
-segment, so the finest granularity you can get is one phrase.
+phrases end, and transcribes each finished phrase — that is the final text
+(`transcript.text.delta`). GigaAM is an offline model and needs a complete
+segment, so finals are per phrase.
+
+**Drafts while speaking.** With `partials=true` (the default when the model runs
+on a GPU) the server also re-decodes the still-open phrase every ~500 ms and
+sends `transcript.text.partial`. Each draft **replaces** the previous one and is
+discarded when the phrase's `delta` arrives. Drafts are not stabilised: the last
+word or a comma may change between ticks. Show them as provisional text.
 
 Typical latency from the end of a phrase to its text is about a second:
 ~600 ms to confirm the pause, plus inference (~0.3 s for a 5-second phrase).
@@ -402,6 +547,8 @@ async def stream_protocol() -> StreamProtocol:
             "token": "AUTH_TOKEN; required when authorization is enabled",
             "model": "model name from GIGAAM_MODELS; omit for the default",
             "language": f"language code; defaults to {DEFAULT_LANGUAGE}",
+            "partials": "true/false: draft text while a phrase is still open; default is on when the model runs on CUDA",
+            "emotions": "true: also send phrase.emotion for every finished phrase (if emotions are enabled on the server)",
         },
         client_messages={
             "<binary>": "audio frame, raw PCM s16le",
@@ -412,7 +559,9 @@ async def stream_protocol() -> StreamProtocol:
             "session.created": "sent once on connect; echoes the effective settings",
             "speech.started": "voice activity detected",
             "speech.stopped": "pause detected",
+            "transcript.text.partial": "draft of the phrase still being spoken; REPLACES the previous draft and is itself replaced by the next delta; fields: text, phrase, start, duration, inference_sec",
             "transcript.text.delta": "text of one finished phrase; fields: delta, seq, start, duration, inference_sec, forced",
+            "phrase.emotion": "emotion of a finished phrase, sent after its delta when emotions=true; fields: seq (matches delta.seq), dominant, emotions {label: prob}, inference_sec",
             "transcript.text.done": "final event; fields: text (everything joined), phrases, session_sec",
             "stream.overflow": "inference fell behind and the oldest queued phrase was dropped",
             "error": "recoverable problem; the session stays open unless stated otherwise",
@@ -425,7 +574,8 @@ async def stream_protocol() -> StreamProtocol:
             "min_phrase_sec": STREAM_MIN_PHRASE_SEC,
         },
         notes=[
-            "No partial hypotheses inside a phrase: the model is offline and needs a complete segment.",
+            "Final text is per phrase: the model is offline and needs a complete segment.",
+            "With partials on, the open phrase is re-decoded every partial_interval_ms and sent as transcript.text.partial: an unstabilised draft whose tail may change; render it as provisional and drop it when the delta arrives.",
             "A phrase longer than max_phrase_sec is cut anyway and arrives with forced=true.",
             "Fragments shorter than min_phrase_sec are dropped as clicks or noise.",
             "Silence is trimmed before inference, which both saves CPU and improves accuracy.",

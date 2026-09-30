@@ -63,10 +63,27 @@ class GigaAMOnnxEmo:
             if threads > 0:
                 opts.intra_op_num_threads = threads
             opts.log_severity_level = 3
+            # Устройство модели эмоций — отдельная настройка EMO_DEVICE
+            # (cpu | cuda | auto), по умолчанию cpu. Модель весит ~1 ГБ, и на
+            # карте с 4 ГБ вместе с двумя моделями распознавания она
+            # переполняет видеопамять; на больших GPU (DGX Spark) её стоит
+            # включить — в живой диктовке эмоция считается на каждую фразу.
+            # При cuda/auto берётся та же доля CUDA_MEM_LIMIT_MB, что у ASR-модели.
+            from src.asr.onnx_engine import _device_of, _providers
+
+            providers = ["CPUExecutionProvider"]
+            if os.getenv("EMO_DEVICE", "cpu").lower() in ("cuda", "auto"):
+                try:
+                    providers = _providers(rt)
+                except RuntimeError:
+                    providers = ["CPUExecutionProvider"]
             self.session = rt.InferenceSession(
-                str(model_path), providers=["CPUExecutionProvider"], sess_options=opts
+                str(model_path), providers=providers, sess_options=opts
             )
-            logger.info(f"Emo ONNX model loaded ({model_path.stat().st_size >> 20} MB)")
+            logger.info(
+                f"Emo ONNX model loaded ({model_path.stat().st_size >> 20} MB) "
+                f"on {_device_of(self.session)}"
+            )
 
     def classify(self, audio: np.ndarray) -> Dict[str, float]:
         """

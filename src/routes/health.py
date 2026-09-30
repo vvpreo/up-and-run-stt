@@ -14,6 +14,7 @@ from src.asr.registry import list_models
 from src.asr.vad import silero_vad
 from src.routes.stream import active_sessions as active_stream_sessions
 from src.config import (
+    APP_ENV,
     AUTH_TOKEN,
     DEFAULT_MODEL,
     ENABLE_DOCS,
@@ -108,6 +109,8 @@ async def health_check() -> dict:
         # Набор моделей инстанса и их состояние; выбор — полем `model` запроса
         "models": {name: m.is_loaded() for name, m in list_models().items()},
         "default_model": DEFAULT_MODEL,
+        # Стенд экземпляра (prod|dev|test|uat) — определяет маркер на иконке
+        "app_env": APP_ENV,
         # Фактическое устройство инференса модели по умолчанию: cuda | cpu
         "device": (_asr_model.get_info().get("device") if _asr_model is not None else None),
         # Запросы в обработке/очереди (лимит — MAX_PENDING_REQUESTS)

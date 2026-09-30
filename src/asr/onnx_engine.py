@@ -62,10 +62,16 @@ def _providers(rt) -> list:
     иначе CPU. `cuda` — требует CUDA явно (ошибка, если недоступна), чтобы
     GPU-образ не работал молча на CPU.
 
-    CUDA_MEM_LIMIT_MB — потолок арены ORT на GPU. На машинах с единой памятью
-    (DGX Spark) переполнение GPU-памяти не даёт чистой ошибки, а вешает хост,
-    и cgroup-лимиты Docker его не ловят — поэтому кап ставится здесь, в
-    процессе. 0 = без лимита.
+    CUDA_MEM_LIMIT_MB — бюджет GPU-памяти на ВСЕ модели распознавания
+    инстанса; он делится поровну между моделями из GIGAAM_MODELS, потому что
+    ORT ограничивает арену каждой сессии отдельно (без деления две модели с
+    капом 3 ГБ заняли бы 6 и уронили карту на 4 ГБ: cuBLAS FAIL на длинном
+    файле). На машинах с единой памятью (DGX Spark) переполнение GPU-памяти
+    не даёт чистой ошибки, а вешает хост, и cgroup-лимиты Docker его не
+    ловят — поэтому кап ставится здесь, в процессе. 0 = без лимита.
+
+    Арена растёт ровно на запрошенный объём (kSameAsRequested): стратегия по
+    умолчанию удваивает её и на небольших картах выбирает память впустую.
     """
     device = os.getenv("DEVICE", "auto").lower()
     if device == "cpu":
@@ -81,10 +87,16 @@ def _providers(rt) -> list:
     if not has_cuda:
         return ["CPUExecutionProvider"]
 
-    cuda_opts = {"cudnn_conv_algo_search": "HEURISTIC"}
+    cuda_opts = {
+        "cudnn_conv_algo_search": "HEURISTIC",
+        "arena_extend_strategy": "kSameAsRequested",
+    }
     limit_mb = int(os.getenv("CUDA_MEM_LIMIT_MB", "0"))
     if limit_mb > 0:
-        cuda_opts["gpu_mem_limit"] = limit_mb << 20
+        from src.config import GIGAAM_MODELS
+
+        per_model = limit_mb // max(1, len(GIGAAM_MODELS))
+        cuda_opts["gpu_mem_limit"] = per_model << 20
     return [("CUDAExecutionProvider", cuda_opts), "CPUExecutionProvider"]
 
 
@@ -298,6 +310,19 @@ class GigaAMOnnxASR(ASRModel):
             f"ONNX model '{name}{ONNX_VARIANT}' loaded "
             f"({model_path.stat().st_size >> 20} MB) on {self.device}"
         )
+        if self.device == "cuda":
+            # Прогрев: первый прогон на GPU платит за загрузку ядер и подбор
+            # алгоритмов cuDNN (на GTX 1050 Ti — ~0.9 с против 0.05 с потом).
+            # Без него эту задержку получил бы первый пользователь.
+            try:
+                import time
+
+                t0 = time.perf_counter()
+                for sec in (2, 6):
+                    self._infer_chunk(np.zeros(sec * SAMPLE_RATE, dtype=np.float32))
+                logger.info(f"GPU warm-up for '{name}' took {time.perf_counter() - t0:.2f} s")
+            except Exception:
+                logger.exception("GPU warm-up failed (non-fatal)")
 
     def get_info(self) -> dict:
         info = super().get_info()

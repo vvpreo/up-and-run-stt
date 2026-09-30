@@ -31,6 +31,14 @@ COPY pyproject.toml uv.lock ./
 # --no-dev: pytest/requests в рантайм-образ не нужны.
 RUN uv sync --frozen --no-dev --no-install-project
 
+# Иконки приложения для всех стендов (prod без маркера, dev/test/uat с рамкой)
+# генерируются из прод-исходника здесь, на стадии сборки: рендерер SVG нужен
+# только тут и в рантайм-образ не попадает.
+COPY scripts/gen_icons.py scripts/gen_icons.py
+COPY src/utils/icons.py src/utils/icons.py
+COPY src/static/icons/favicon.svg src/static/icons/favicon.svg
+RUN uv run --no-project --with resvg-py==0.5.0 python scripts/gen_icons.py --out /app/icons
+
 # ============================ runtime =================================
 FROM python:3.11-slim-bookworm
 
@@ -102,6 +110,7 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 # Copy application code (vendored gigaam НЕ нужен — ONNX-движок самодостаточен)
 COPY --chown=app:app src/ /app/src/
 COPY --chown=app:app main.py /app/
+COPY --from=builder --chown=app:app /app/icons /app/src/static/icons/generated
 
 # Create cache directory (mount point for the models volume)
 RUN mkdir -p /app/data && chown app:app /app/data && chmod 755 /app/data

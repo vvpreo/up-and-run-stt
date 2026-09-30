@@ -4,7 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>up-and-run-stt</title>
-<link rel="icon" href="data:,">
+<!-- Иконка зависит от стенда (APP_ENV): на dev/test/uat сервер отдаёт её с цветной рамкой -->
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
   :root {
     --bg: #10141a; --card: #1a2029; --card2: #212936; --border: #2e3a4b;
@@ -148,6 +151,21 @@
   .log-type.done { color: var(--ok); background: #3ecf8e1a; }
   .log-type.err { color: var(--err); background: #ff6b6b1a; }
   .log-text { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* черновик незакрытой фразы: текст ещё может измениться */
+  .draft { color: var(--muted); font-style: italic; }
+  .emo-tag { font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+             border-radius: 5px; padding: 0 5px; margin: 0 4px 0 2px; white-space: nowrap; }
+  .log-type.part { color: var(--muted); background: #8b98a51a; }
+  .log-type.emo { color: #c9a0ff; background: #c9a0ff1a; }
+  /* сырой поток JSON-событий сервера */
+  details.raw { margin-top: 10px; }
+  details.raw summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  .raw-log {
+    background: #0c1015; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; margin-top: 6px; max-height: 320px; overflow: auto;
+    font-family: ui-monospace, monospace; font-size: 11.5px; white-space: pre; line-height: 1.5;
+  }
+  .raw-log .rt { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -223,11 +241,17 @@
 
     <div class="pane" id="pane-live">
       <div class="slot" id="slot-live"></div>
+      <div class="row">
+        <label class="toggle" title="Параметр partials: пока фраза не закрыта паузой, сервер раз в ~0.5 с перераспознаёт накопленное и шлёт черновик (transcript.text.partial). Черновик заменяется целиком и может меняться; финал фразы приходит как обычно. По умолчанию включено на GPU."><input type="checkbox" id="partialsOn"> Черновик по ходу речи</label>
+        <label class="toggle" id="liveEmoWrap" title="Параметр emotions=true: после текста каждой фразы сервер присылает её эмоцию отдельным событием phrase.emotion (модель GigaAMEmo)."><input type="checkbox" id="liveEmoOn"> Эмоции по фразам</label>
+      </div>
       <div class="grp-d">
         Ручка <code>WS /stt/stream</code> — наша, <b>не</b> протокол OpenAI Realtime.
         Аудио уходит сырым PCM по мере речи, сервер сам режет поток на фразы своим
-        VAD и присылает текст каждой, не дожидаясь конца. Настраивать нечего:
-        VAD здесь не опция — без него сегментатор не знает, где кончается фраза.
+        VAD и присылает финальный текст каждой. VAD здесь не опция — без него
+        сегментатор не знает, где кончается фраза. Черновик — это текст ещё не
+        закрытой фразы (серым): он дешёвый и нестабильный, хвост может меняться.
+        Под результатом можно раскрыть сырой поток JSON-событий сервера.
       </div>
     </div>
 
@@ -275,7 +299,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'tabs-6';
+const UI_BUILD = 'live-7';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -352,14 +376,18 @@ function renderHealth() {
   $('healthText').textContent = ok ? 'сервис готов' : (h ? 'модель не загружена' : 'недоступен');
   if (h) {
     $('healthDetail').textContent =
-      `v${h.version || '?'} · UI ${UI_BUILD} · engine: ${h.engine} · модели: ${Object.keys(h.models || {}).join(', ')} · ` +
+      `v${h.version || '?'} · UI ${UI_BUILD} · engine: ${h.engine} · ${h.device || 'cpu'} · модели: ${Object.keys(h.models || {}).join(', ')} · ` +
       `RAM: ${Math.round(h.memory?.process_memory_mb ?? 0)} МБ · очередь: ${h.pending_requests ?? 0}`;
     document.querySelector('.tab[data-tab="emo"]').hidden = !h.emotions_enabled;
+    $('liveEmoWrap').hidden = !h.emotions_enabled;
+    // Черновики по умолчанию — как на сервере: только когда модель на GPU
+    if (!partialsInit) { $('partialsOn').checked = h.device === 'cuda'; partialsInit = true; }
     $('docsLinks').hidden = !h.docs_enabled;
     if (!vadInit) { $('vadOn').checked = !!h.vad_chunking; vadInit = true; }
   }
 }
 let vadInit = false;
+let partialsInit = false;
 
 /* =============================== options ============================= */
 const FORMATS = {
@@ -562,6 +590,8 @@ async function startLive() {
   if (tok) params.set('token', tok);
   const mdl = $('model').value;
   if (mdl) params.set('model', mdl);
+  params.set('partials', $('partialsOn').checked ? 'true' : 'false');
+  if ($('liveEmoOn').checked && !$('liveEmoWrap').hidden) params.set('emotions', 'true');
   const ws = new WebSocket(`${proto}://${location.host}/stt/stream?${params}`);
   ws.binaryType = 'arraybuffer';
 
@@ -573,10 +603,27 @@ async function startLive() {
     <div class="status" id="live-mic"><span class="spin"></span>соединение…</div>
     <div class="result-text" style="min-height:52px"></div>
     <div class="stream-log"></div>
+    <details class="raw">
+      <summary>Сырые события сервера (JSON) · <span class="raw-n">0</span></summary>
+      <div class="raw-log"></div>
+    </details>
     <div class="meta"></div>`;
   $('results').prepend(card);
   const textEl = card.querySelector('.result-text');
   const logEl = card.querySelector('.stream-log');
+  const rawEl = card.querySelector('.raw-log');
+  const rawN = card.querySelector('.raw-n');
+  let rawCount = 0;
+  // Сырой поток: каждое сообщение сервера как есть, одной строкой JSON.
+  // Держим последние 1000 строк — черновики идут дважды в секунду.
+  const raw = text => {
+    const line = document.createElement('div');
+    line.innerHTML = `<span class="rt">${((performance.now() - t0) / 1000).toFixed(2).padStart(7)} с</span>  ${esc(text)}`;
+    rawEl.appendChild(line);
+    while (rawEl.childElementCount > 1000) rawEl.firstChild.remove();
+    rawEl.scrollTop = rawEl.scrollHeight;
+    rawN.textContent = ++rawCount;
+  };
   const statusEl = card.querySelector('#live-mic');
   const metaEl = card.querySelector('.meta');
   const t0 = performance.now();
@@ -584,7 +631,8 @@ async function startLive() {
   const log = (type, msg) => {
     const line = document.createElement('div');
     line.className = 'log-line';
-    const cls = type === 'delta' ? 'delta' : type === 'done' ? 'done' : 'err';
+    const cls = type === 'delta' ? 'delta' : type === 'done' ? 'done'
+      : type === 'emotion' ? 'emo' : type === 'open' ? 'part' : 'err';
     line.innerHTML = `<span class="log-t">${((performance.now() - t0) / 1000).toFixed(2)} с</span>` +
       `<span class="log-type ${cls}">${esc(type)}</span><span class="log-text">${esc(msg)}</span>`;
     logEl.appendChild(line); logEl.scrollTop = logEl.scrollHeight;
@@ -593,17 +641,32 @@ async function startLive() {
   const ctx = new AudioContext();
   const src = ctx.createMediaStreamSource(stream);
   const node = ctx.createScriptProcessor(4096, 1, 1);
-  const parts = [];
+  const parts = [];     // закрытые фразы: {seq, text, emo}
+  let draft = '';       // черновик текущей незакрытой фразы
+  const EMO_RU = { angry: 'злость', sad: 'грусть', neutral: 'нейтрально', positive: 'позитив' };
+  const render = () => {
+    textEl.innerHTML = parts.map(p =>
+      esc(p.text) + (p.emo ? ` <span class="emo-tag">${esc(p.emo)}</span>` : '')
+    ).join(' ') + (draft ? ` <span class="draft">${esc(draft)}</span>` : '');
+  };
   live = { ws, ctx, stream, node, src, startedAt: Date.now() };
 
-  ws.onopen = () => { statusEl.innerHTML = '<span class="spin"></span>говорите — текст появится по фразам…'; };
+  ws.onopen = () => { statusEl.innerHTML = '<span class="spin"></span>говорите…'; };
 
   ws.onmessage = ev => {
+    raw(ev.data);
     const e = JSON.parse(ev.data);
-    if (e.type === 'transcript.text.delta') {
-      parts.push(e.delta);
-      textEl.textContent = parts.join(' ');
+    if (e.type === 'transcript.text.partial') {
+      draft = e.text; render();
+    } else if (e.type === 'transcript.text.delta') {
+      parts.push({ seq: e.seq, text: e.delta, emo: '' });
+      draft = ''; render();
       log('delta', `${e.duration}s → ${e.delta}`);
+    } else if (e.type === 'phrase.emotion') {
+      const p = parts.find(x => x.seq === e.seq);
+      const label = `${EMO_RU[e.dominant] || e.dominant} ${Math.round((e.emotions?.[e.dominant] ?? 0) * 100)}%`;
+      if (p) { p.emo = label; render(); }
+      log('emotion', `#${e.seq} ${label}`);
     } else if (e.type === 'speech.started') {
       statusEl.innerHTML = '<span class="spin"></span>речь…';
     } else if (e.type === 'speech.stopped') {
@@ -613,11 +676,14 @@ async function startLive() {
     } else if (e.type === 'error') {
       log('error', e.error);
     } else if (e.type === 'transcript.text.done') {
+      draft = ''; render();
       statusEl.remove();
       metaEl.textContent = `живая диктовка · ${e.phrases} фраз · сессия ${e.session_sec} с`;
       log('done', `${e.phrases} фраз`);
     } else if (e.type === 'session.created') {
-      log('open', `${e.model} · ${e.sample_rate} Гц · пауза ${e.silence_ms} мс`);
+      log('open', `${e.model} · ${e.sample_rate} Гц · пауза ${e.silence_ms} мс` +
+        (e.partials ? ` · черновики каждые ${e.partial_interval_ms} мс (${e.partial_model})` : ' · без черновиков') +
+        (e.emotions ? ' · эмоции' : ''));
     }
   };
 

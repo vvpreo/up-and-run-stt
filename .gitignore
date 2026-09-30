@@ -21,3 +21,6 @@ benchmark/results/
 .hf_token
 *.token
 benchmark/read-aloud/audio/
+
+# иконки стендов — артефакт сборки (scripts/gen_icons.py)
+src/static/icons/generated/

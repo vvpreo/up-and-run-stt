@@ -118,7 +118,7 @@ docker run -d --name up-and-run-stt-cuda \
 |---|---|
 | `--gpus all` | Without it the container sees no GPU and, because the images set `DEVICE=cuda`, refuse to start instead of silently running on the CPU. |
 | `DEVICE` | `cuda` (image default), `cpu`, or `auto` (CUDA if usable, otherwise CPU). |
-| `CUDA_MEM_LIMIT_MB` | Cap on the ONNX Runtime GPU arena, in MB (`0` = no cap). Mandatory on machines with unified memory (DGX Spark): there GPU allocations are invisible to Docker's cgroup limits, and running out of memory hangs the host rather than failing the process. 4 GB is plenty for both models. |
+| `CUDA_MEM_LIMIT_MB` | GPU memory budget for the ASR models, in MB (`0` = no cap); it is split evenly between the models in `GIGAAM_MODELS`, because ONNX Runtime caps each session separately. Mandatory on machines with unified memory (DGX Spark): there GPU allocations are invisible to Docker's cgroup limits, and running out of memory hangs the host rather than failing the process. On a 4 GB card use ~3200 for two models. |
 | `GIGAAM_MODELS` | On a 4 GB card keep just `v3_e2e_ctc`: both models fit (~2.1 GB), but RNNT is not worth it on small hosts — its per-frame decoder runs on the CPU and costs several times more per phrase. |
 
 `/health` reports the effective device (`"device": "cuda"`). The weights volume
@@ -295,14 +295,36 @@ messages are JSON: `{"type":"commit"}` closes the current phrase immediately,
 `{"type":"close"}` ends the session.
 
 The server replies with JSON events: `session.created`, `speech.started` /
-`speech.stopped`, `transcript.text.delta` for each finished phrase, a final
-`transcript.text.done`, and `stream.overflow` if inference falls behind and the
-oldest queued phrase had to be dropped.
+`speech.stopped`, `transcript.text.partial` (drafts, optional),
+`transcript.text.delta` for each finished phrase, `phrase.emotion` (optional), a
+final `transcript.text.done`, and `stream.overflow` if inference falls behind and
+the oldest queued phrase had to be dropped. The WebUI shows this raw event stream
+under the result («Сырые события сервера (JSON)»).
 
-**Results arrive per phrase, never word by word.** GigaAM is an offline model — it
-needs a complete segment — so there are no partial hypotheses inside a phrase.
-Latency from the end of a phrase to its text is about a second: ~600 ms to confirm
-the pause plus inference (~0.3 s for a 5-second phrase).
+**Final text arrives per phrase.** GigaAM is an offline model — it needs a complete
+segment. Latency from the end of a phrase to its text is about a second on a CPU:
+~600 ms to confirm the pause plus inference (~0.3 s for a 5-second phrase; ~0.05 s
+on a GPU).
+
+**Drafts while speaking (`partials`).** While a phrase is still open the server can
+re-decode everything accumulated in it every `STREAM_PARTIAL_INTERVAL_MS` (500 ms)
+and send `transcript.text.partial`. Each draft **replaces** the previous one, and
+the phrase's `transcript.text.delta` replaces the draft for good. This is cheap
+and deliberately unstabilised: the last word or a comma may change between ticks,
+so render drafts as provisional text. It also removes the long silence when
+someone talks without pausing (a phrase is otherwise only cut after 20 s). Drafts
+are always computed with the CTC model, even if the session uses RNNT. The
+default is `STREAM_PARTIALS=auto`: on when the model runs on a GPU, off on a CPU,
+where one 10-second window costs about a second; a client overrides it with
+`?partials=true|false`. Measured on a GTX 1050 Ti: the first draft ~1 s after
+speech starts, then one every 0.5 s at ~70 ms of inference each.
+
+**Emotions per phrase (`emotions=true`).** After the text of each finished phrase
+the server sends `phrase.emotion` (`seq` matches the delta, `dominant`,
+`emotions {label: prob}`) as a separate event, so text is never delayed by it.
+The emotion model loads on first use and runs on the CPU by default
+(`EMO_DEVICE=cpu|cuda|auto`): it is ~1 GB and does not fit next to two ASR models
+on a 4 GB card; on a large GPU set `EMO_DEVICE=cuda`.
 
 Measured cost on the reference CPU: an open session is **~0.5% of a core** for
 continuous voice detection plus ~2 MB of buffers, and inference runs only when a
@@ -331,7 +353,7 @@ different endpoints rather than variations of one:
 
 | Tab | Endpoint | Options it has |
 |---|---|---|
-| Живая диктовка *(default)* | `WS /stt/stream` | none — the answer is always deltas and VAD is always on |
+| Живая диктовка *(default)* | `WS /stt/stream` | drafts while speaking (`partials`), emotions per phrase; VAD is always on |
 | Распознавание целиком | `POST /v1/audio/transcriptions` or `POST /stt/asr` | contract, response format, word timestamps, VAD chunking, `stream=true` (OpenAI only) |
 | Распознавание эмоций | `POST /stt/emotion` | none — no text is produced |
 
@@ -400,6 +422,13 @@ no difference.
 Everything is configured through environment variables at runtime — in the
 `environment` block of `docker-compose.yml` (comments included there) or via
 `docker run -e`. 
+
+Stand marker: `APP_ENV=prod|dev|test|uat` (default `prod`). It only affects the
+application icon: on non-production stands the favicon gets a solid frame —
+red for dev, blue for test, green for uat — so a tab can never be mistaken for
+production. All variants are generated from one source
+(`src/static/icons/favicon.svg`) at image build time by `scripts/gen_icons.py`;
+the image is the same for every stand. `/health` reports it as `app_env`.
 
 Inference device: `DEVICE=auto|cuda|cpu` (the CPU image has no CUDA provider,
 so `auto` means CPU there; the CUDA image defaults to `cuda`), and

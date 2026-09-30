@@ -202,6 +202,42 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-cache"},
         )
 
+    # Иконка приложения. Набор файлов зависит от стенда (APP_ENV): PNG/ICO
+    # сгенерированы при сборке образа для всех стендов
+    # (scripts/gen_icons.py -> static/icons/generated/<stand>/), SVG
+    # собирается на лету — он не требует рендерера. Иконки открыты без токена.
+    from fastapi import HTTPException
+    from fastapi.responses import Response
+
+    from src.config import APP_ENV
+    from src.utils.icons import badged_svg, normalize_stand
+
+    stand = normalize_stand(APP_ENV)
+    icons_dir = Path(__file__).parent / "static" / "icons" / "generated" / stand
+    icon_headers = {"Cache-Control": "public, max-age=3600"}
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon_svg() -> Response:
+        return Response(badged_svg(stand), media_type="image/svg+xml", headers=icon_headers)
+
+    def _icon_file(name: str, media_type: str):
+        async def handler() -> FileResponse:
+            path = icons_dir / name
+            if not path.is_file():
+                # Запуск из исходников без сборки образа: растровых иконок нет
+                raise HTTPException(status_code=404, detail="icon not generated")
+            return FileResponse(path, media_type=media_type, headers=icon_headers)
+
+        return handler
+
+    for _name, _type in (
+        ("favicon.ico", "image/x-icon"),
+        ("apple-touch-icon.png", "image/png"),
+        ("icon-192.png", "image/png"),
+        ("icon-512.png", "image/png"),
+    ):
+        app.get(f"/{_name}", include_in_schema=False)(_icon_file(_name, _type))
+
     return app
 
 
