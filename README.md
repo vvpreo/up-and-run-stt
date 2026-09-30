@@ -123,6 +123,14 @@ including behaviour next to a large LLM on the same GPU, are in
 [`docs/SPARK_BENCHMARK.md`](docs/SPARK_BENCHMARK.md); operational notes for the
 Spark are in [`docs/SPARK.md`](docs/SPARK.md).
 
+**Older GPUs (Pascal / Volta, compute capability 6.x–7.0, e.g. GTX 10xx):** CUDA 13
+dropped them, so the `cuda` tag will not start there. Build the CUDA 12 variant
+instead: `./build.sh --cuda12` (same Dockerfile, different build args: CUDA 12.8
+base image, `onnxruntime-gpu` 1.29 from the ONNX Runtime CUDA 12 feed, and the
+CUDA forward-compat package removed — on GeForce it fails with `CUDA failure 804`
+whereas plain minor-version compatibility works with any 525+ driver). Verified on
+a GTX 1050 Ti (4 GB, driver 535): both models fit in ~2.1 GB of VRAM.
+
 From source: `./build.sh --cuda` or `docker compose --profile cuda up -d up-and-run-stt-cuda`
 (the profile shares port 9007 with the CPU service, so run one or the other).
 The image installs the same `uv.lock` as the CPU one and then swaps `onnxruntime`

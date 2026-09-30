@@ -11,6 +11,15 @@
 #     молча на CPU.
 #
 # Запуск: docker run --gpus all --ipc=host ... (см. docker-compose.yml, профиль cuda).
+#
+# Вариант под CUDA 12 (старые GPU: Pascal/Volta, которых нет в CUDA 13; драйвер
+# от 525): те же слои, другие аргументы — `./build.sh --cuda12` или
+#   docker build -f Dockerfile.cuda \
+#     --build-arg CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 \
+#     --build-arg ORT_GPU_VERSION=1.29.0 \
+#     --build-arg ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/ \
+#     --build-arg CUDA_COMPAT=remove .
+# На PyPI onnxruntime-gpu собран под CUDA 13; сборки под CUDA 12 лежат в фиде ORT.
 # На машинах с единой памятью (DGX Spark) обязательно CUDA_MEM_LIMIT_MB —
 # cgroup-лимиты Docker GPU-аллокации не ловят, а переполнение вешает хост.
 
@@ -37,9 +46,11 @@ COPY pyproject.toml uv.lock ./
 # onnxruntime -> onnxruntime-gpu. Версия GPU-пакета прибита: она определяет
 # требования к CUDA/cuDNN и набор поддерживаемых архитектур GPU.
 ARG ORT_GPU_VERSION=1.30.0
+# Пустой ORT_INDEX_URL = PyPI (CUDA 13); для CUDA 12 — фид ORT (см. шапку)
+ARG ORT_INDEX_URL=""
 RUN uv sync --frozen --no-dev --no-install-project \
     && uv pip uninstall onnxruntime \
-    && uv pip install "onnxruntime-gpu==${ORT_GPU_VERSION}"
+    && uv pip install ${ORT_INDEX_URL:+--index-url "$ORT_INDEX_URL"} "onnxruntime-gpu==${ORT_GPU_VERSION}"
 
 # ============================ runtime =================================
 FROM ${CUDA_IMAGE}
@@ -68,6 +79,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
+
+# Forward-compat пакет CUDA (/usr/local/cuda/compat): toolkit подставляет его,
+# когда драйвер хоста старше рантайма образа. Работает только на датацентровых
+# GPU; на GeForce даёт «CUDA failure 804: forward compatibility was attempted
+# on non supported HW», хотя обычная minor-version совместимость (драйвер
+# 525+ для любого CUDA 12.x) там работает. Для CUDA 12-варианта (старые
+# GeForce с драйвером ниже рантайма) каталог удаляется; по умолчанию остаётся.
+ARG CUDA_COMPAT=keep
+RUN if [ "$CUDA_COMPAT" = "remove" ]; then rm -rf /usr/local/cuda/compat; fi
 
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 RUN ffmpeg -version | head -1
