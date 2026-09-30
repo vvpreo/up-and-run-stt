@@ -110,8 +110,14 @@ RUN usermod -l app -d /home/app -m ubuntu && groupmod -n app ubuntu \
 
 WORKDIR /app
 
+# Скачивание с ретраями: HF время от времени отвечает 503, и разовый сбой
+# не должен ронять сборку (так упал dry-run релиза на cuda13/arm64).
 RUN mkdir -p /app/vad \
-    && python3 -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/vvpreo/gigaam-v3-onnx/resolve/main/silero_vad.onnx', '/app/vad/silero_vad.onnx')" \
+    && for i in 1 2 3 4 5 6; do \
+         python3 -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/vvpreo/gigaam-v3-onnx/resolve/main/silero_vad.onnx', '/app/vad/silero_vad.onnx')" && break; \
+         echo "silero_vad download attempt $i failed, retrying"; sleep $((i * 5)); \
+       done \
+    && test -s /app/vad/silero_vad.onnx \
     && chown -R app:app /app/vad
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv

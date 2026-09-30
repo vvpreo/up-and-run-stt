@@ -85,8 +85,14 @@ WORKDIR /app
 
 # Silero-VAD (~2.3 МБ, MIT) — запечён в образ: детекция речи для умного
 # чанкования длинного аудио (см. src/asr/vad.py). Зеркало — наш HF-репо.
+# Скачивание с ретраями: HF время от времени отвечает 503, и разовый сбой
+# не должен ронять сборку (так упал dry-run релиза на cuda13/arm64).
 RUN mkdir -p /app/vad \
-    && python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/vvpreo/gigaam-v3-onnx/resolve/main/silero_vad.onnx', '/app/vad/silero_vad.onnx')" \
+    && for i in 1 2 3 4 5 6; do \
+         python -c "import urllib.request; urllib.request.urlretrieve('https://huggingface.co/vvpreo/gigaam-v3-onnx/resolve/main/silero_vad.onnx', '/app/vad/silero_vad.onnx')" && break; \
+         echo "silero_vad download attempt $i failed, retrying"; sleep $((i * 5)); \
+       done \
+    && test -s /app/vad/silero_vad.onnx \
     && chown -R app:app /app/vad
 
 # Готовое окружение из builder-стадии (пути внутри venv абсолютные, поэтому
