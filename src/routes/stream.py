@@ -41,6 +41,7 @@ from src.config import (
     STREAM_PARTIALS,
     STREAM_SILENCE_MS,
 )
+from src.services.meter import meter
 from src.services.stream_session import PhraseSegmenter, pcm16_to_float32
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,7 @@ async def audio_stream(
         t0 = time.perf_counter()
         try:
             probs = await asyncio.to_thread(emo_model.classify, phrase.audio)
+            meter.record("live:emotion", time.perf_counter() - t0, phrase.duration_sec)
             await websocket.send_json(
                 {
                     "type": "phrase.emotion",
@@ -231,6 +233,7 @@ async def audio_stream(
                     "text",
                 )
                 text = (result if isinstance(result, str) else result.text).strip()
+                meter.record("live:final", time.perf_counter() - t0, phrase.duration_sec)
             except Exception as e:
                 logger.exception("[stream] phrase transcription failed")
                 await websocket.send_json({"type": "error", "error": str(e)})
@@ -290,6 +293,7 @@ async def audio_stream(
             except Exception:
                 logger.exception("[stream] partial transcription failed")
                 continue
+            meter.record("live:partial", time.perf_counter() - t0, len(audio) / SAMPLE_RATE)
             if segmenter.phrase_id != phrase_id or final_busy:
                 continue  # фраза уже закрылась — её покажет финал
             text = (result if isinstance(result, str) else result.text).strip()

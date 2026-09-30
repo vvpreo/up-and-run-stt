@@ -18,6 +18,7 @@ from src.config import (
     AUTH_TOKEN,
     DEFAULT_MODEL,
     ENABLE_DOCS,
+    ENABLE_STATS,
     ENGINE,
     STREAM_MAX_SESSIONS,
     TIMEOUT_ENABLED,
@@ -121,6 +122,8 @@ async def health_check() -> dict:
         "emotions_enabled": emotions_available(),
         # Включён ли Swagger UI (/docs) и OpenAPI-схема (/openapi.json)
         "docs_enabled": ENABLE_DOCS,
+        # Доступна ли панель «Загрузка» (GET /stats)
+        "stats_enabled": ENABLE_STATS,
         # VAD-чанкование: дефолт сервера (переопределяется per-request)
         "vad_chunking": VAD_CHUNKING and silero_vad.available(),
         # Живые WebSocket-сессии потокового приёма аудио (/stt/stream).

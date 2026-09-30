@@ -15,9 +15,13 @@ from pathlib import Path
 from threading import Lock
 from typing import List, Optional, Tuple
 
+import time
+
 import numpy as np
 
 from src.config import SAMPLE_RATE
+
+from src.services.meter import meter
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +66,11 @@ class VadStream:
         """Вероятность речи для очередного окна ровно из _FRAME сэмплов."""
         frame = np.asarray(frame, dtype=np.float32)
         inp = np.concatenate([self._context, frame])[None]  # (1, 576)
+        t0 = time.perf_counter()
         out, self._state = self._session.run(
             None, {"input": inp, "state": self._state, "sr": self._sr}
         )
+        meter.record("vad", time.perf_counter() - t0, _FRAME / SAMPLE_RATE)
         self._context = frame[-_CONTEXT:]
         return float(out[0, 0])
 

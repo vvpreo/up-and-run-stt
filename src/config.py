@@ -129,6 +129,11 @@ SAMPLE_RATE = 16000
 # Set to None or empty string to use auto-detection
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "ru")
 
+# Панель «Загрузка» и ручка GET /stats. Сбор идёт только по запросу: пока
+# панель свёрнута, сервис ничего не считает и nvidia-smi не вызывает.
+# false — ручка отвечает 404, панель в консоли скрыта.
+ENABLE_STATS = os.getenv("ENABLE_STATS", "true").lower() == "true"
+
 # Стенд, на котором работает этот экземпляр: prod | dev | test | uat.
 # Влияет только на иконку приложения (favicon и пр.): на непродовых стендах
 # она получает цветную рамку, чтобы вкладку нельзя было спутать с продом

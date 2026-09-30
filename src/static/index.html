@@ -157,6 +157,27 @@
              border-radius: 5px; padding: 0 5px; margin: 0 4px 0 2px; white-space: nowrap; }
   .log-type.part { color: var(--muted); background: #8b98a51a; }
   .log-type.emo { color: #c9a0ff; background: #c9a0ff1a; }
+  /* панель «Загрузка» */
+  details.load { margin: -8px 0 18px; }
+  details.load > summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  details.load > summary b { color: var(--text); font-weight: 600; }
+  .load-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-top: 10px; }
+  .tile { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .tile .t-name { color: var(--muted); font-size: 12px; }
+  .tile .t-val { font-size: 20px; font-weight: 600; margin: 2px 0 4px; font-variant-numeric: tabular-nums; }
+  .tile .t-sub { color: var(--muted); font-size: 11.5px; min-height: 15px; }
+  .bar { height: 5px; background: #0c1015; border-radius: 3px; overflow: hidden; margin: 6px 0; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .4s; }
+  .bar > i.hot { background: var(--warn); } .bar > i.max { background: var(--err); }
+  .tile canvas { width: 100%; height: 34px; display: block; }
+  table.load-t { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 12.5px; }
+  table.load-t th { text-align: left; color: var(--muted); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  table.load-t td { padding: 4px 8px; border-bottom: 1px solid #2e3a4b55; font-variant-numeric: tabular-nums; }
+  table.load-t td.num, table.load-t th.num { text-align: right; }
+  .mini { display: inline-block; width: 70px; height: 5px; background: #0c1015; border-radius: 3px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+  .mini > i { display: block; height: 100%; background: var(--accent); }
+  .load-note { color: var(--muted); font-size: 11.5px; margin-top: 8px; }
+
   /* сырой поток JSON-событий сервера */
   details.raw { margin-top: 10px; }
   details.raw summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
@@ -192,6 +213,31 @@
     <button class="ghost" id="logoutBtn" hidden>сменить ключ</button>
   </h1>
   <div class="sub" id="healthDetail">&nbsp;</div>
+
+  <!-- Загрузка сервиса в реальном времени (GET /stats, раз в секунду, только
+       пока блок раскрыт). Общая для всех вкладок. -->
+  <details class="load" id="loadBox">
+    <summary>Загрузка сервиса <span id="loadBrief"></span></summary>
+    <div class="load-grid">
+      <div class="tile"><div class="t-name">CPU процесса</div><div class="t-val" id="ldCpu">—</div>
+        <div class="bar"><i id="ldCpuBar"></i></div><canvas id="ldCpuSp"></canvas><div class="t-sub" id="ldCpuSub"></div></div>
+      <div class="tile"><div class="t-name">Память процесса</div><div class="t-val" id="ldMem">—</div>
+        <div class="bar"><i id="ldMemBar"></i></div><canvas id="ldMemSp"></canvas><div class="t-sub" id="ldMemSub"></div></div>
+      <div class="tile" id="ldGpuTile"><div class="t-name">GPU</div><div class="t-val" id="ldGpu">—</div>
+        <div class="bar"><i id="ldGpuBar"></i></div><canvas id="ldGpuSp"></canvas><div class="t-sub" id="ldGpuSub"></div></div>
+      <div class="tile" id="ldVramTile"><div class="t-name">Видеопамять</div><div class="t-val" id="ldVram">—</div>
+        <div class="bar"><i id="ldVramBar"></i></div><canvas id="ldVramSp"></canvas><div class="t-sub" id="ldVramSub"></div></div>
+    </div>
+    <table class="load-t">
+      <thead><tr><th>На что уходит время (последние 5 с)</th><th class="num">занятость</th><th class="num">вызовов</th><th class="num">в среднем</th><th class="num">аудио</th><th class="num">всего вызовов</th></tr></thead>
+      <tbody id="ldAct"></tbody>
+    </table>
+    <table class="load-t">
+      <thead><tr><th>Модель</th><th>устройство</th><th class="num">RAM при загрузке</th><th class="num">бюджет GPU</th><th>состояние</th></tr></thead>
+      <tbody id="ldModels"></tbody>
+    </table>
+    <div class="load-note" id="ldNote"></div>
+  </details>
 
   <!-- Модель применяется не везде: на вкладке эмоций своя модель, которой
        выбор модели распознавания не передаётся. Поэтому блок не висит
@@ -299,7 +345,7 @@
 /* =============================== state =============================== */
 // Маркер сборки UI: виден в подзаголовке — по нему сразу ясно,
 // не показывает ли браузер закэшированную старую страницу.
-const UI_BUILD = 'live-7';
+const UI_BUILD = 'load-9';
 const $ = id => document.getElementById(id);
 let TOKEN = localStorage.getItem('stt_token') || '';
 let HEALTH = null;
@@ -366,6 +412,7 @@ function showApp() {
   placeCommon();
   fillFormats();
   setInterval(async () => { try { HEALTH = await fetchHealth(); renderHealth(); } catch {} }, 15000);
+  initLoad();
 }
 
 /* =============================== health ============================== */
@@ -380,6 +427,7 @@ function renderHealth() {
       `RAM: ${Math.round(h.memory?.process_memory_mb ?? 0)} МБ · очередь: ${h.pending_requests ?? 0}`;
     document.querySelector('.tab[data-tab="emo"]').hidden = !h.emotions_enabled;
     $('liveEmoWrap').hidden = !h.emotions_enabled;
+    $('loadBox').hidden = h.stats_enabled === false;
     // Черновики по умолчанию — как на сервере: только когда модель на GPU
     if (!partialsInit) { $('partialsOn').checked = h.device === 'cuda'; partialsInit = true; }
     $('docsLinks').hidden = !h.docs_enabled;
@@ -388,6 +436,113 @@ function renderHealth() {
 }
 let vadInit = false;
 let partialsInit = false;
+
+/* =============================== загрузка ============================ */
+// Панель опрашивает /stats раз в секунду и только пока раскрыта — свёрнутая
+// она не создаёт ни запросов, ни нагрузки (nvidia-smi на сервере тоже не дёргается).
+const LOAD = { timer: null, hist: { cpu: [], mem: [], gpu: [], vram: [] }, N: 90 };
+const ACT_NAMES = {
+  'live:partial': 'живая диктовка: черновики',
+  'live:final': 'живая диктовка: финалы фраз',
+  'live:emotion': 'живая диктовка: эмоции фраз',
+  'emo': 'модель эмоций (инференс)',
+  'vad': 'VAD — детектор речи (silero)',
+};
+const actName = k => ACT_NAMES[k] || (k.startsWith('asr:') ? `модель ${k.slice(4)} (инференс)` : k);
+
+function spark(id, arr, max, color) {
+  const c = $(id); if (!c) return;
+  const w = c.width = c.clientWidth * devicePixelRatio, h = c.height = c.clientHeight * devicePixelRatio;
+  const g = c.getContext('2d'); g.clearRect(0, 0, w, h);
+  if (arr.length < 2) return;
+  const top = Math.max(max || 0, ...arr, 1e-9), step = w / (LOAD.N - 1), x0 = w - (arr.length - 1) * step;
+  g.beginPath();
+  arr.forEach((v, i) => { const x = x0 + i * step, y = h - 2 - (v / top) * (h - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+  g.strokeStyle = color; g.lineWidth = 1.5 * devicePixelRatio; g.stroke();
+  g.lineTo(w, h); g.lineTo(x0, h); g.closePath(); g.fillStyle = color + '22'; g.fill();
+}
+function setBar(id, pct) {
+  const el = $(id); el.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  el.className = pct > 90 ? 'max' : pct > 70 ? 'hot' : '';
+}
+const push = (k, v) => { const a = LOAD.hist[k]; a.push(v); if (a.length > LOAD.N) a.shift(); };
+const gb = mb => mb >= 1024 ? (mb / 1024).toFixed(2) + ' ГБ' : Math.round(mb) + ' МБ';
+
+async function pollLoad() {
+  let d;
+  try { d = await (await fetch('/stats')).json(); } catch { $('ldNote').textContent = 'нет ответа от /stats'; return; }
+  const c = d.cpu, m = d.memory, g = d.gpu;
+
+  push('cpu', c.process_pct);
+  $('ldCpu').textContent = `${c.process_pct.toFixed(0)} %`;
+  $('ldCpuSub').textContent = `${(c.process_pct / 100).toFixed(2)} ядра из ${c.cores} · хост ${c.system_pct.toFixed(0)} % · потоков ${c.threads}`;
+  setBar('ldCpuBar', c.process_pct_of_total);
+  spark('ldCpuSp', LOAD.hist.cpu, 100, '#4da3ff');
+
+  push('mem', m.process_rss_mb);
+  $('ldMem').textContent = gb(m.process_rss_mb);
+  $('ldMemSub').textContent = `хост: ${gb(m.system_used_mb)} из ${gb(m.system_total_mb)}`;
+  setBar('ldMemBar', 100 * m.process_rss_mb / m.system_total_mb);
+  spark('ldMemSp', LOAD.hist.mem, 0, '#3ecf8e');
+
+  $('ldGpuTile').hidden = $('ldVramTile').hidden = !g;
+  if (g) {
+    if (g.util_pct != null) {
+      push('gpu', g.util_pct);
+      $('ldGpu').textContent = `${g.util_pct.toFixed(0)} %`;
+      setBar('ldGpuBar', g.util_pct);
+      spark('ldGpuSp', LOAD.hist.gpu, 100, '#c9a0ff');
+    }
+    $('ldGpuSub').textContent = `${g.name}${g.temp_c != null ? ' · ' + g.temp_c.toFixed(0) + ' °C' : ''}`;
+    if (g.mem_used_mb != null && g.mem_total_mb) {
+      push('vram', g.mem_used_mb);
+      $('ldVram').textContent = gb(g.mem_used_mb);
+      $('ldVramSub').textContent = `из ${gb(g.mem_total_mb)} · вся карта, не только сервис`;
+      setBar('ldVramBar', 100 * g.mem_used_mb / g.mem_total_mb);
+      spark('ldVramSp', LOAD.hist.vram, g.mem_total_mb, '#e8c98a');
+    } else {
+      $('ldVram').textContent = 'н/д';
+      $('ldVramSub').textContent = 'единая память: GPU делит её с системой';
+    }
+  }
+
+  const order = k => (k.startsWith('live:') ? 0 : k.startsWith('asr:') ? 1 : 2) + k;
+  const acts = Object.entries(d.activity).sort((a, b) => order(a[0]).localeCompare(order(b[0])));
+  $('ldAct').innerHTML = acts.length ? acts.map(([k, a]) => `<tr>
+      <td>${esc(actName(k))}</td>
+      <td class="num"><span class="mini"><i style="width:${Math.min(100, a.busy_pct)}%"></i></span>${a.busy_pct.toFixed(1)} %</td>
+      <td class="num">${a.calls}</td>
+      <td class="num">${a.avg_ms != null ? a.avg_ms.toFixed(0) + ' мс' : '—'}</td>
+      <td class="num">${a.audio_sec ? a.audio_sec.toFixed(1) + ' с' : '—'}</td>
+      <td class="num">${a.calls_total}</td></tr>`).join('')
+    : '<tr><td colspan="6" style="color:var(--muted)">пока ничего не распознавалось</td></tr>';
+
+  $('ldModels').innerHTML = d.models.map(x => `<tr>
+      <td>${esc(x.name)}</td><td>${esc(x.device)}</td>
+      <td class="num">${x.ram_mb != null ? gb(x.ram_mb) : '—'}</td>
+      <td class="num">${x.gpu_budget_mb != null ? 'до ' + gb(x.gpu_budget_mb) : '—'}</td>
+      <td>${x.loaded ? 'загружена' : 'не загружена (грузится при первом запросе)'}</td></tr>`).join('');
+
+  $('ldNote').textContent =
+    `живых сессий: ${d.sessions.stream} · запросов в работе: ${d.sessions.pending_requests} · ` +
+    'сбор идёт только пока панель раскрыта · занятость — доля времени за последние 5 с, когда вид работы держал модель (100 % = непрерывно); ' +
+    'строки «живая диктовка» показывают то же время моделей, но по назначению.';
+  $('loadBrief').innerHTML = `· CPU <b>${c.process_pct.toFixed(0)} %</b>` +
+    (g && g.util_pct != null ? ` · GPU <b>${g.util_pct.toFixed(0)} %</b>` : '') +
+    ` · RAM <b>${gb(m.process_rss_mb)}</b>` +
+    (g && g.mem_used_mb != null ? ` · VRAM <b>${gb(g.mem_used_mb)}</b>` : '');
+}
+function initLoad() {
+  const box = $('loadBox');
+  const sync = () => {
+    clearInterval(LOAD.timer); LOAD.timer = null;
+    try { localStorage.setItem('stt_load_open', box.open ? '1' : ''); } catch {}
+    if (box.open) { pollLoad(); LOAD.timer = setInterval(pollLoad, 1000); }
+    else $('loadBrief').textContent = '';
+  };
+  box.addEventListener('toggle', sync);
+  try { if (localStorage.getItem('stt_load_open')) box.open = true; } catch {}
+}
 
 /* =============================== options ============================= */
 const FORMATS = {

@@ -175,6 +175,9 @@ def create_app() -> FastAPI:
     app.include_router(openai_compat_router)
     app.include_router(emotion_router)
     app.include_router(stream_router)
+    from src.routes.stats import router as stats_router
+
+    app.include_router(stats_router)
 
     # Проверка токена для WebUI (страница показывает интерфейс только
     # после успешного ответа отсюда)

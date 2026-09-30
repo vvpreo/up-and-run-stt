@@ -80,9 +80,10 @@ class GigaAMOnnxEmo:
             self.session = rt.InferenceSession(
                 str(model_path), providers=providers, sess_options=opts
             )
+            self.device = _device_of(self.session)
             logger.info(
                 f"Emo ONNX model loaded ({model_path.stat().st_size >> 20} MB) "
-                f"on {_device_of(self.session)}"
+                f"on {self.device}"
             )
 
     def classify(self, audio: np.ndarray) -> Dict[str, float]:
@@ -95,6 +96,12 @@ class GigaAMOnnxEmo:
         """
         self.ensure_loaded()
         audio = np.asarray(audio, dtype=np.float32)
+        from src.services.meter import meter
+
+        with meter.timed("emo", len(audio) / SAMPLE_RATE):
+            return self._classify(audio)
+
+    def _classify(self, audio: np.ndarray) -> Dict[str, float]:
         chunk = int(EMO_CHUNK_SEC * SAMPLE_RATE)
 
         acc = np.zeros(len(self.labels), dtype=np.float64)

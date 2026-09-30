@@ -346,11 +346,14 @@ class GigaAMOnnxASR(ASRModel):
         Returns:
             (text, token_ids, token_frames, frame_shift)
         """
-        feats = self.featurizer(audio)
-        if self._is_rnnt:
-            token_ids, token_frames, enc_frames = self._rnnt_decode(feats)
-        else:
-            token_ids, token_frames, enc_frames = self._ctc_decode(feats)
+        from src.services.meter import meter
+
+        with meter.timed(f"asr:{self.model_name}", len(audio) / SAMPLE_RATE):
+            feats = self.featurizer(audio)
+            if self._is_rnnt:
+                token_ids, token_frames, enc_frames = self._rnnt_decode(feats)
+            else:
+                token_ids, token_frames, enc_frames = self._ctc_decode(feats)
 
         frame_shift = (len(audio) / SAMPLE_RATE) / max(enc_frames, 1)
         return self.tokenizer.decode(token_ids), token_ids, token_frames, frame_shift

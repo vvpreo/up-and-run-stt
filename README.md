@@ -202,6 +202,7 @@ network and from other containers. It comes back up after a reboot
 | `GET` | `/v1/models`, `/v1/models/{id}` | Models available on this instance (OpenAI format, for GUI clients). |
 | `POST` | `/v1/audio/translations` | Not supported (the model is Russian-only) — returns a proper 400. |
 | `GET`  | `/health` | Status, models, queue, feature flags, memory. |
+| `GET`  | `/stats` | Live load: process CPU and RAM, GPU utilisation and memory, models with their device, and where inference time goes (per model, VAD, live drafts / finals / emotions) over the last 5 s. Polled by the «Загрузка сервиса» panel in the WebUI, and only while that panel is expanded: nothing is collected in the background (~3 ms per request, ~1 % of a core at 1 Hz). `ENABLE_STATS=false` removes it. |
 | `GET`  | `/` | WebUI console: log in with `AUTH_TOKEN`, mic/file input, both API contracts, all formats, word timestamps, emotions ([src/static/index.html](src/static/index.html)). |
 
 A Swagger UI is also available at `http://localhost:9007/docs`.
