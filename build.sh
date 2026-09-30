@@ -4,9 +4,10 @@
 #   ./build.sh                              # локальный CPU-образ up-and-run-stt:latest
 #   ./build.sh myuser/up-and-run-stt        # образ с тегом для Docker Hub
 #   ./build.sh myuser/up-and-run-stt --push # + docker push
-#   ./build.sh --cuda                       # GPU-образ up-and-run-stt-cuda:latest (Dockerfile.cuda)
-#   ./build.sh --cuda myuser/up-and-run-stt:cuda --push
-#   ./build.sh --cuda12                     # то же под CUDA 12.8 (старые GPU, Pascal/Volta)
+#   ./build.sh --cuda13                     # GPU-образ под CUDA 13 (Turing+, драйвер 580+), up-and-run-stt-cuda13:latest
+#   ./build.sh --cuda12                     # GPU-образ под CUDA 12.8 (Pascal+, драйвер 525+), up-and-run-stt-cuda12:latest
+#   ./build.sh --cuda13 myuser/up-and-run-stt:cuda13 --push
+# Про выбор между cuda12 и cuda13 — шапка Dockerfile.cuda.
 #
 # Публичный запуск собранного образа (веса скачиваются при первом старте
 # в том gigaam-models, ~845 МБ на модель):
@@ -21,9 +22,9 @@ cd "$(dirname "$0")"
 DOCKERFILE=Dockerfile
 DEFAULT_IMAGE=up-and-run-stt:latest
 BUILD_ARGS=()
-if [[ "${1:-}" == "--cuda" ]]; then
+if [[ "${1:-}" == "--cuda13" ]]; then
     DOCKERFILE=Dockerfile.cuda
-    DEFAULT_IMAGE=up-and-run-stt-cuda:latest
+    DEFAULT_IMAGE=up-and-run-stt-cuda13:latest
     shift
 elif [[ "${1:-}" == "--cuda12" ]]; then
     # CUDA 12.8: для GPU, которых нет в CUDA 13 (Pascal/Volta, compute capability 6.x–7.0)
@@ -31,8 +32,7 @@ elif [[ "${1:-}" == "--cuda12" ]]; then
     DEFAULT_IMAGE=up-and-run-stt-cuda12:latest
     BUILD_ARGS=(--build-arg CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
                 --build-arg ORT_GPU_VERSION=1.29.0
-                --build-arg ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
-                --build-arg CUDA_COMPAT=remove)
+                --build-arg ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/)
     shift
 fi
 

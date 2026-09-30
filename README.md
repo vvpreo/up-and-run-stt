@@ -79,17 +79,28 @@ curl -s http://localhost:9007/v1/audio/transcriptions \
 
 Available tags: `latest`, plus `X.Y.Z` / `X.Y` / `X` — pin as tightly as you like.
 The image is **~0.7 GB** (inference on ONNX Runtime, no PyTorch). For NVIDIA GPUs
-there is a separate `cuda` tag — see [GPU variant](#gpu-variant-cuda).
+there are separate `cuda12` / `cuda13` tags — see [GPU variants](#gpu-variants-cuda-12-and-cuda-13).
 
-### GPU variant (CUDA)
+### GPU variants (CUDA 12 and CUDA 13)
 
-The same service and the same ONNX engine, with inference on
-`CUDAExecutionProvider` instead of the CPU. It is a **separate image** —
-`vvpreo/up-and-run-stt:cuda` (plus `X.Y.Z-cuda` / `X.Y-cuda` / `X-cuda`), built from
-`Dockerfile.cuda` for both `linux/amd64` and `linux/arm64`. The CPU image is not
-affected by it. Requirements on the host: an NVIDIA driver and the NVIDIA
-Container Toolkit (`--gpus all`). The image is ~3.7 GB, almost all of it the
-CUDA 13 / cuDNN 9 runtime.
+The same service and the same ONNX engine, with inference on the GPU
+(`CUDAExecutionProvider`). These are **separate images**, built from
+`Dockerfile.cuda`; the CPU image is not affected. Two variants are published,
+and which one you need is decided by your GPU and driver:
+
+| Tag | CUDA | Minimum driver | GPUs | Arch |
+|---|---|---|---|---|
+| `cuda12`, `X.Y.Z-cuda12` | 12.8 | 525 | **Pascal and newer**: GTX 10xx / 16xx, RTX 20 / 30 / 40 / 50, P100, V100, T4, A/H series | amd64 |
+| `cuda13`, `X.Y.Z-cuda13` | 13.0 | 580 | **Turing and newer**: RTX 20 / 30 / 40 / 50, T4, A/H series, DGX Spark (GB10) | amd64, arm64 |
+
+There is deliberately no bare `cuda` tag: the CUDA generation is dictated by the
+hardware, so pick it explicitly. If your card is a GTX 10xx or otherwise older
+than Turing, `cuda13` cannot work at all (CUDA 13 dropped Pascal and Volta), and
+`cuda12` is the one. If you have a DGX Spark or another arm64 host, only
+`cuda13` exists. For everything in between both work; `cuda13` is the current
+line. Requirements on the host: the NVIDIA driver and the NVIDIA Container
+Toolkit (`--gpus all`). Each image is 4–6 GB, almost all of it the CUDA / cuDNN
+runtime.
 
 ```bash
 docker run -d --name up-and-run-stt-cuda \
@@ -100,42 +111,49 @@ docker run -d --name up-and-run-stt-cuda \
   -e GIGAAM_MODELS=v3_e2e_ctc,v3_e2e_rnnt \
   -e CUDA_MEM_LIMIT_MB=4096 \
   --restart unless-stopped \
-  vvpreo/up-and-run-stt:cuda
+  vvpreo/up-and-run-stt:cuda13      # or :cuda12
 ```
 
 | Flag / variable | Why it matters |
 |---|---|
-| `--gpus all` | Without it the container sees no GPU and, because the image sets `DEVICE=cuda`, refuses to start instead of silently running on the CPU. |
-| `DEVICE` | `cuda` (image default), `cpu`, or `auto` (CUDA if available, otherwise CPU). |
-| `CUDA_MEM_LIMIT_MB` | Cap on the ONNX Runtime GPU arena, in MB (`0` = no cap). Set it on machines with unified memory (DGX Spark): there GPU allocations are invisible to Docker's cgroup limits, and running out of memory hangs the host rather than failing the process. 4 GB is plenty for both models. |
+| `--gpus all` | Without it the container sees no GPU and, because the images set `DEVICE=cuda`, refuse to start instead of silently running on the CPU. |
+| `DEVICE` | `cuda` (image default), `cpu`, or `auto` (CUDA if usable, otherwise CPU). |
+| `CUDA_MEM_LIMIT_MB` | Cap on the ONNX Runtime GPU arena, in MB (`0` = no cap). Mandatory on machines with unified memory (DGX Spark): there GPU allocations are invisible to Docker's cgroup limits, and running out of memory hangs the host rather than failing the process. 4 GB is plenty for both models. |
+| `GIGAAM_MODELS` | On a 4 GB card keep just `v3_e2e_ctc`: both models fit (~2.1 GB), but RNNT is not worth it on small hosts — its per-frame decoder runs on the CPU and costs several times more per phrase. |
 
 `/health` reports the effective device (`"device": "cuda"`). The weights volume
 is the same as for the CPU image (fp32 ONNX; do not use the `.int8` variant on
-CUDA). With `v3_e2e_rnnt` the encoder runs on the GPU while the tiny
-per-frame decoder stays on the CPU on purpose — kernel-launch overhead would make
-it slower on the GPU — so RNNT costs a few CPU cores under load.
+CUDA).
 
-Measured on a DGX Spark (GB10, arm64): a 137 s clip in 0.53 s (~260× realtime,
-20× the reference CPU); in live dictation one phrase takes ~35 ms and the
-end-of-phrase latency stays at ~0.1 s up to 40 concurrent sessions, with the GPU
-below 10 % busy; the container takes ~4 GB with both models loaded. Full numbers,
-including behaviour next to a large LLM on the same GPU, are in
-[`docs/SPARK_BENCHMARK.md`](docs/SPARK_BENCHMARK.md); operational notes for the
-Spark are in [`docs/SPARK.md`](docs/SPARK.md).
+If it does not start, the log tells you which of the three usual causes it is:
 
-**Older GPUs (Pascal / Volta, compute capability 6.x–7.0, e.g. GTX 10xx):** CUDA 13
-dropped them, so the `cuda` tag will not start there. Build the CUDA 12 variant
-instead: `./build.sh --cuda12` (same Dockerfile, different build args: CUDA 12.8
-base image, `onnxruntime-gpu` 1.29 from the ONNX Runtime CUDA 12 feed, and the
-CUDA forward-compat package removed — on GeForce it fails with `CUDA failure 804`
-whereas plain minor-version compatibility works with any 525+ driver). Verified on
-a GTX 1050 Ti (4 GB, driver 535): both models fit in ~2.1 GB of VRAM.
+- `DEVICE=cuda but the ONNX session fell back to CPU` — the container has no
+  usable GPU: `--gpus all` is missing, the Container Toolkit is not installed, or
+  the driver is too old for this CUDA generation.
+- `CUDA failure 804: forward compatibility was attempted on non supported HW` —
+  an image that still carries NVIDIA's forward-compat package on a GeForce card.
+  The published images have it removed; if you rebuilt from a modified
+  Dockerfile, delete `/usr/local/cuda/compat`.
+- `no kernel image is available for execution on the device` — the GPU is older
+  than this CUDA generation supports: switch to `cuda12`.
 
-From source: `./build.sh --cuda` or `docker compose --profile cuda up -d up-and-run-stt-cuda`
-(the profile shares port 9007 with the CPU service, so run one or the other).
-The image installs the same `uv.lock` as the CPU one and then swaps `onnxruntime`
-for a pinned `onnxruntime-gpu`; the two packages are mutually exclusive, which is
-why the swap lives in the Dockerfile rather than in an extra.
+Measured numbers (DGX Spark GB10 and a GTX 1050 Ti) are in
+[`docs/SPARK_BENCHMARK.md`](docs/SPARK_BENCHMARK.md): on the Spark a 137 s clip
+transcribes in 0.53 s (~260× realtime), a live-dictation phrase takes ~35 ms and
+end-of-phrase latency stays at ~0.1 s up to 40 concurrent sessions; on the 1050 Ti
+the same clip takes 2.1 s and 1–10 sessions behave like on the Spark, the six CPU
+cores of the laptop being the limit. Operational notes for the Spark are in
+[`docs/SPARK.md`](docs/SPARK.md).
+
+From source: `./build.sh --cuda13` / `./build.sh --cuda12`, or
+`docker compose --profile cuda13 up -d up-and-run-stt-cuda13` (likewise `cuda12`);
+the profiles share port 9007 with the CPU service, so run one at a time. Both
+variants come from one `Dockerfile.cuda` through build arguments (base image and
+where `onnxruntime-gpu` is taken from: PyPI ships the CUDA 13 build, the CUDA 12
+build comes from the ONNX Runtime feed). The image installs the same `uv.lock`
+as the CPU one and then swaps `onnxruntime` for the pinned `onnxruntime-gpu`; the
+two packages are mutually exclusive, which is why the swap lives in the
+Dockerfile rather than in an extra.
 
 ### Running from source
 
@@ -379,7 +397,7 @@ Everything is configured through environment variables at runtime — in the
 
 Inference device: `DEVICE=auto|cuda|cpu` (the CPU image has no CUDA provider,
 so `auto` means CPU there; the CUDA image defaults to `cuda`), and
-`CUDA_MEM_LIMIT_MB` for the GPU memory cap — see [GPU variant](#gpu-variant-cuda).
+`CUDA_MEM_LIMIT_MB` for the GPU memory cap — see [GPU variants](#gpu-variants-cuda-12-and-cuda-13).
 
 ### Models: the instance set and per-request selection
 

@@ -100,17 +100,19 @@ services:
       # First start downloads the model before the server is ready.
       start_period: 300s
 
-  # --- GPU-вариант (профиль cuda) -------------------------------------------
-  # Тот же сервис на onnxruntime-gpu (см. Dockerfile.cuda). Поднимается только
-  # явно: `docker compose --profile cuda up -d up-and-run-stt-cuda`. Занимает
-  # тот же порт 9007, поэтому одновременно с CPU-вариантом не запускается.
-  up-and-run-stt-cuda:
-    profiles: ["cuda"]
+  # --- GPU-варианты (профили cuda13 / cuda12) --------------------------------
+  # Тот же сервис на onnxruntime-gpu (см. шапку Dockerfile.cuda: какой вариант
+  # под какую карту и драйвер). Поднимаются только явно:
+  #   docker compose --profile cuda13 up -d up-and-run-stt-cuda13
+  #   docker compose --profile cuda12 up -d up-and-run-stt-cuda12
+  # Оба занимают тот же порт 9007, что и CPU-сервис — одновременно не запускать.
+  up-and-run-stt-cuda13: &cuda-service
+    profiles: ["cuda13"]
     build:
       context: .
       dockerfile: Dockerfile.cuda
-    image: up-and-run-stt-cuda:latest
-    container_name: up-and-run-stt-cuda
+    image: up-and-run-stt-cuda13:latest
+    container_name: up-and-run-stt-cuda13
     ports:
       - "0.0.0.0:9007:9007"
     ipc: host
@@ -121,7 +123,7 @@ services:
       DEVICE: cuda
       # Потолок GPU-арены ORT, МБ. На машинах с единой памятью (DGX Spark)
       # обязателен: cgroup-лимиты GPU-аллокации не ловят, переполнение вешает хост.
-      CUDA_MEM_LIMIT_MB: "8192"
+      CUDA_MEM_LIMIT_MB: "4096"
       DEFAULT_LANGUAGE: ru
       HOST: 0.0.0.0
       PORT: "9007"
@@ -142,6 +144,22 @@ services:
       timeout: 10s
       retries: 3
       start_period: 300s
+
+  # CUDA 12.8 для старых GPU (Pascal и новее, драйвер 525+). На картах с 4 ГБ
+  # разумно оставить одну модель: GIGAAM_MODELS=v3_e2e_ctc (RNNT там невыгоден —
+  # его декодер работает на CPU).
+  up-and-run-stt-cuda12:
+    <<: *cuda-service
+    profiles: ["cuda12"]
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+      args:
+        CUDA_IMAGE: nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+        ORT_GPU_VERSION: "1.29.0"
+        ORT_INDEX_URL: https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+    image: up-and-run-stt-cuda12:latest
+    container_name: up-and-run-stt-cuda12
 
 volumes:
   gigaam-models:

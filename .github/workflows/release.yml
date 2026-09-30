@@ -91,10 +91,17 @@ jobs:
   # ---------------------------------------------------------------- сборка
   # Каждая архитектура собирается на своём нативном раннере и пушится
   # БЕЗ тега, по дайджесту; в один multi-arch тег их сшивает job merge.
-  # Два варианта образа из одного репозитория: cpu (Dockerfile, теги X.Y.Z /
-  # latest) и cuda (Dockerfile.cuda, теги X.Y.Z-cuda / cuda). GPU на раннерах
-  # нет, поэтому cuda-образ здесь только собирается; проверка на реальной GPU
-  # (DGX Spark) — ручная, см. docs/SPARK.md.
+  # Три варианта образа из одного репозитория Docker Hub (см. Dockerfile.cuda):
+  #   cpu    — Dockerfile,      теги X.Y.Z / X.Y / X / latest,  amd64 + arm64
+  #   cuda12 — Dockerfile.cuda, теги X.Y.Z-cuda12 / ... / cuda12, amd64
+  #            (CUDA 12.8: GPU от Pascal, драйвер 525+; aarch64-сборок ORT под
+  #            CUDA 12 нет, старые GeForce живут на x86)
+  #   cuda13 — Dockerfile.cuda, теги X.Y.Z-cuda13 / ... / cuda13, amd64 + arm64
+  #            (CUDA 13.0: GPU от Turing, драйвер 580+, DGX Spark)
+  # Короткого алиаса `cuda` нет намеренно: выбор версии CUDA определяется
+  # железом и драйвером, и его должен сделать тот, кто ставит образ.
+  # GPU на раннерах нет, поэтому здесь CUDA-образы только собираются; CI гоняет
+  # их тесты в CPU-режиме, проверка на реальной GPU — ручная (docs/SPARK.md).
   build:
     needs: version
     if: ${{ !inputs.dry_run }}
@@ -102,17 +109,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [cpu, cuda]
-        arch: [amd64, arm64]
         include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
           - variant: cpu
+            arch: amd64
+            runner: ubuntu-latest
             dockerfile: Dockerfile
-          - variant: cuda
+            build_args: ""
+          - variant: cpu
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile
+            build_args: ""
+          - variant: cuda12
+            arch: amd64
+            runner: ubuntu-latest
             dockerfile: Dockerfile.cuda
+            build_args: |
+              CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+              ORT_GPU_VERSION=1.29.0
+              ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+          - variant: cuda13
+            arch: amd64
+            runner: ubuntu-latest
+            dockerfile: Dockerfile.cuda
+            build_args: ""
+          - variant: cuda13
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile.cuda
+            build_args: ""
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,6 +161,7 @@ jobs:
             VERSION=${{ needs.version.outputs.version }}
             REVISION=${{ github.sha }}
             CREATED=${{ needs.version.outputs.created }}
+            ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
@@ -165,13 +191,18 @@ jobs:
       # Артефакты digest-<variant>-<arch> раскладываются по каталогам вариантов
       - uses: actions/download-artifact@v4
         with:
-          path: /tmp/digests
+          path: /tmp/digests/cpu
           pattern: digest-cpu-*
           merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
-          path: /tmp/digests-cuda
-          pattern: digest-cuda-*
+          path: /tmp/digests/cuda12
+          pattern: digest-cuda12-*
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests/cuda13
+          pattern: digest-cuda13-*
           merge-multiple: true
 
       - uses: docker/setup-buildx-action@v3
@@ -183,34 +214,28 @@ jobs:
 
       # X.Y.Z — точная версия; X.Y и X — «последняя в линейке», чтобы можно
       # было закрепиться на минорной ветке; latest — последний стабильный.
-      # CUDA-вариант — те же теги с суффиксом -cuda и плавающий `cuda`.
+      # CUDA-варианты — те же теги с суффиксом -cuda12 / -cuda13 и плавающие
+      # `cuda12` / `cuda13`. Алиаса `cuda` нет (см. комментарий к job build).
       - name: Create multi-arch manifests
         run: |
           V="${{ needs.version.outputs.version }}"
           MAJOR="${V%%.*}"; MINOR="${V%.*}"
-          SRCS=""
-          for f in /tmp/digests/*; do
-            SRCS="$SRCS ${{ env.IMAGE }}@$(cat "$f")"
-          done
-          docker buildx imagetools create \
-            -t "${{ env.IMAGE }}:$V" \
-            -t "${{ env.IMAGE }}:$MINOR" \
-            -t "${{ env.IMAGE }}:$MAJOR" \
-            -t "${{ env.IMAGE }}:latest" \
-            $SRCS
-          docker buildx imagetools inspect "${{ env.IMAGE }}:$V"
-
-          SRCS=""
-          for f in /tmp/digests-cuda/*; do
-            SRCS="$SRCS ${{ env.IMAGE }}@$(cat "$f")"
-          done
-          docker buildx imagetools create \
-            -t "${{ env.IMAGE }}:$V-cuda" \
-            -t "${{ env.IMAGE }}:$MINOR-cuda" \
-            -t "${{ env.IMAGE }}:$MAJOR-cuda" \
-            -t "${{ env.IMAGE }}:cuda" \
-            $SRCS
-          docker buildx imagetools inspect "${{ env.IMAGE }}:$V-cuda"
+          publish() {  # publish <variant-dir> <suffix> <floating-tag>
+            local srcs=""
+            for f in /tmp/digests/$1/*; do
+              srcs="$srcs ${{ env.IMAGE }}@$(cat "$f")"
+            done
+            docker buildx imagetools create \
+              -t "${{ env.IMAGE }}:$V$2" \
+              -t "${{ env.IMAGE }}:$MINOR$2" \
+              -t "${{ env.IMAGE }}:$MAJOR$2" \
+              -t "${{ env.IMAGE }}:$3" \
+              $srcs
+            docker buildx imagetools inspect "${{ env.IMAGE }}:$V$2"
+          }
+          publish cpu    ""        latest
+          publish cuda12 "-cuda12" cuda12
+          publish cuda13 "-cuda13" cuda13
 
       - name: Create GitHub Release
         env:
@@ -238,7 +263,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE }}
-          short-description: "Local Russian speech-to-text (GigaAM, ONNX Runtime, CPU or CUDA) with an OpenAI-compatible API"
+          short-description: "Local Russian speech-to-text (GigaAM, ONNX Runtime; CPU, CUDA 12 and CUDA 13 images) with an OpenAI-compatible API"
 
   # ------------------------------------------------------------ edge-образ
   # Не относится к релизу: отдельный воркфлоу держал бы дубль сборки, а так
@@ -250,17 +275,35 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [cpu, cuda]
-        arch: [amd64, arm64]
         include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
           - variant: cpu
+            arch: amd64
+            runner: ubuntu-latest
             dockerfile: Dockerfile
-          - variant: cuda
+            build_args: ""
+          - variant: cpu
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile
+            build_args: ""
+          - variant: cuda12
+            arch: amd64
+            runner: ubuntu-latest
             dockerfile: Dockerfile.cuda
+            build_args: |
+              CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+              ORT_GPU_VERSION=1.29.0
+              ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+          - variant: cuda13
+            arch: amd64
+            runner: ubuntu-latest
+            dockerfile: Dockerfile.cuda
+            build_args: ""
+          - variant: cuda13
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile.cuda
+            build_args: ""
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -274,4 +317,5 @@ jobs:
           build-args: |
             VERSION=${{ needs.version.outputs.version }}
             REVISION=${{ github.sha }}
+            ${{ matrix.build_args }}
           cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}

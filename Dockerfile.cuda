@@ -1,27 +1,37 @@
-# Dockerfile.cuda — GPU-вариант up-and-run-stt: тот же код и тот же ONNX-движок,
-# но инференс через CUDAExecutionProvider (onnxruntime-gpu). Собирается под
-# linux/amd64 и linux/arm64 — на aarch64 (DGX Spark, GB10 / sm_121) с ORT >= 1.29
-# штатный wheel с PyPI содержит ядра для sm_121, сборка из исходников не нужна.
+# Dockerfile.cuda — GPU-варианты up-and-run-stt: тот же код и тот же ONNX-движок,
+# что в CPU-образе (Dockerfile), но инференс через CUDAExecutionProvider
+# (onnxruntime-gpu). Один Dockerfile, два варианта через build-аргументы:
+#
+#   cuda13 (по умолчанию)  — CUDA 13.0 + cuDNN 9, onnxruntime-gpu с PyPI.
+#       GPU: Turing и новее (RTX 20/30/40/50, T4, A/H-серии, DGX Spark / GB10).
+#       Драйвер: 580+. Архитектуры образа: amd64 и arm64.
+#   cuda12                 — CUDA 12.8 + cuDNN 9, onnxruntime-gpu из фида ORT под CUDA 12.
+#       GPU: Pascal и новее (GTX 10xx, 16xx, RTX 20/30/40/50, P100/V100 …) —
+#       CUDA 13 выбросила Pascal/Volta, а таких карт у людей больше всего.
+#       Драйвер: 525+ (minor-version совместимость CUDA 12.x). Только amd64:
+#       aarch64-сборок ORT под CUDA 12 нет, старые GeForce живут на x86.
+#       ./build.sh --cuda12, или вручную:
+#         docker build -f Dockerfile.cuda \
+#           --build-arg CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 \
+#           --build-arg ORT_GPU_VERSION=1.29.0 \
+#           --build-arg ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/ .
+#
+# Опубликованные теги: X.Y.Z-cuda12 / cuda12 и X.Y.Z-cuda13 / cuda13. Алиаса
+# `cuda` нет намеренно: какая версия CUDA нужна — определяется картой и
+# драйвером, и это должен выбрать тот, кто ставит образ.
 #
 # Отличия от Dockerfile (CPU):
-#   - база nvidia/cuda ...-cudnn-runtime (CUDA 13.0 + cuDNN 9 — требование CUDA EP);
+#   - база nvidia/cuda ...-cudnn-runtime вместо python:slim (отсюда 4–6 ГБ размера);
 #   - вместо onnxruntime ставится onnxruntime-gpu (пакеты взаимоисключающи:
 #     делят top-level `onnxruntime`, поэтому CPU-пакет удаляется явно);
 #   - DEVICE=cuda: сервис падает на старте, если GPU не виден, а не работает
-#     молча на CPU.
+#     молча на CPU (DEVICE=auto — работать на CPU, если GPU нет; так CI гоняет
+#     тесты этих образов на раннерах без GPU).
 #
-# Запуск: docker run --gpus all --ipc=host ... (см. docker-compose.yml, профиль cuda).
-#
-# Вариант под CUDA 12 (старые GPU: Pascal/Volta, которых нет в CUDA 13; драйвер
-# от 525): те же слои, другие аргументы — `./build.sh --cuda12` или
-#   docker build -f Dockerfile.cuda \
-#     --build-arg CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 \
-#     --build-arg ORT_GPU_VERSION=1.29.0 \
-#     --build-arg ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/ \
-#     --build-arg CUDA_COMPAT=remove .
-# На PyPI onnxruntime-gpu собран под CUDA 13; сборки под CUDA 12 лежат в фиде ORT.
-# На машинах с единой памятью (DGX Spark) обязательно CUDA_MEM_LIMIT_MB —
-# cgroup-лимиты Docker GPU-аллокации не ловят, а переполнение вешает хост.
+# Запуск: docker run --gpus all --ipc=host ... (см. docker-compose.yml, профили
+# cuda12 / cuda13). На машинах с единой памятью (DGX Spark) обязательно
+# CUDA_MEM_LIMIT_MB — cgroup-лимиты Docker GPU-аллокации не ловят, а
+# переполнение вешает хост.
 
 ARG CUDA_IMAGE=nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
 
@@ -80,14 +90,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Forward-compat пакет CUDA (/usr/local/cuda/compat): toolkit подставляет его,
-# когда драйвер хоста старше рантайма образа. Работает только на датацентровых
-# GPU; на GeForce даёт «CUDA failure 804: forward compatibility was attempted
-# on non supported HW», хотя обычная minor-version совместимость (драйвер
-# 525+ для любого CUDA 12.x) там работает. Для CUDA 12-варианта (старые
-# GeForce с драйвером ниже рантайма) каталог удаляется; по умолчанию остаётся.
-ARG CUDA_COMPAT=keep
-RUN if [ "$CUDA_COMPAT" = "remove" ]; then rm -rf /usr/local/cuda/compat; fi
+# Forward-compat пакет CUDA (/usr/local/cuda/compat) удаляется. Container
+# Toolkit подставляет его, когда драйвер хоста старше рантайма образа, но
+# работает это только на датацентровых GPU; на GeForce получается
+# «CUDA failure 804: forward compatibility was attempted on non supported HW»,
+# хотя обычная minor-version совместимость (драйвер 525+ для любого CUDA 12.x,
+# 580+ для 13.x) там прекрасно работает. Целевая аудитория GPU-образов —
+# именно GeForce, поэтому одно простое правило про минимальный драйвер лучше
+# «иногда работающего» compat-пакета.
+RUN rm -rf /usr/local/cuda/compat
 
 COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 RUN ffmpeg -version | head -1

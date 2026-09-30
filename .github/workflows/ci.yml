@@ -1,7 +1,16 @@
-# Проверка каждого пуша и PR: образ должен собраться и пройти интеграционные
-# тесты на ОБЕИХ целевых архитектурах. arm64 гоняется на нативном раннере
-# (ubuntu-24.04-arm бесплатен для публичных репозиториев) — это на порядок
-# быстрее сборки под QEMU и заодно честно проверяет, что образ там работает.
+# Проверка каждого пуша и PR: каждый вариант образа должен собраться и пройти
+# интеграционные тесты. arm64 гоняется на нативном раннере (ubuntu-24.04-arm
+# бесплатен для публичных репозиториев) — это на порядок быстрее сборки под
+# QEMU и заодно честно проверяет, что образ там работает.
+#
+# Варианты (см. Dockerfile.cuda про cuda12/cuda13):
+#   cpu    — Dockerfile,      amd64 + arm64
+#   cuda12 — Dockerfile.cuda, amd64          (CUDA 12.8: Pascal и новее, драйвер 525+)
+#   cuda13 — Dockerfile.cuda, amd64 + arm64  (CUDA 13.0: Turing и новее, драйвер 580+)
+# На раннерах GitHub нет GPU, поэтому CUDA-образы тестируются с DEVICE=auto —
+# движок честно уходит на CPU, и вся сюита проверяет образ целиком (библиотеки,
+# ffmpeg, права, зависимости) — всё, кроме самого CUDA-провайдера. Работа на
+# реальной GPU проверяется вручную перед релизом (docs/SPARK.md).
 name: CI
 
 on:
@@ -17,9 +26,9 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: ${{ matrix.arch }}
+    name: ${{ matrix.variant }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: read
       # Базовый образ для тестов лежит в GHCR этого же репозитория
@@ -28,10 +37,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - variant: cpu
+            arch: amd64
             runner: ubuntu-latest
-          - arch: arm64
+            dockerfile: Dockerfile
+            build_args: ""
+          - variant: cpu
+            arch: arm64
             runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile
+            build_args: ""
+          - variant: cuda12
+            arch: amd64
+            runner: ubuntu-latest
+            dockerfile: Dockerfile.cuda
+            build_args: |
+              CUDA_IMAGE=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+              ORT_GPU_VERSION=1.29.0
+              ORT_INDEX_URL=https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-12/pypi/simple/
+          - variant: cuda13
+            arch: amd64
+            runner: ubuntu-latest
+            dockerfile: Dockerfile.cuda
+            build_args: ""
+          - variant: cuda13
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: Dockerfile.cuda
+            build_args: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -47,6 +80,7 @@ jobs:
       # Веса моделей (~845 МБ) качаются с HF при первом старте. Без кэша
       # это происходило бы на каждом прогоне; ключ включает архитектуру,
       # потому что кэш восстанавливается в примонтированный каталог.
+      # Веса одни и те же для всех вариантов образа.
       - name: Cache model weights
         uses: actions/cache@v4
         with:
@@ -57,14 +91,16 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: linux/${{ matrix.arch }}
           load: true
           tags: up-and-run-stt:ci
           build-args: |
             VERSION=ci-${{ github.sha }}
             REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=cpu-${{ matrix.arch }}
-          cache-to: type=gha,scope=cpu-${{ matrix.arch }},mode=max
+            ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.variant }}-${{ matrix.arch }},mode=max
 
       - name: Start service
         env:
@@ -76,9 +112,12 @@ jobs:
           # Общая сеть с контейнером тестов: он ходит в сервис по имени stt.
           # Порт наружу публикуем всё равно — по нему ждёт готовности шаг ниже.
           docker network create ci
+          # DEVICE=auto: CUDA-образы на раннере без GPU работают на CPU
+          # (с DEVICE=cuda, дефолтом образа, они бы честно отказались стартовать).
           docker run -d --name stt --network ci -p 9007:9007 \
             -v "$PWD/.ci-models:/app/data" \
             -e AUTH_TOKEN="$AUTH_TOKEN" \
+            -e DEVICE=auto \
             up-and-run-stt:ci
 
       - name: Wait for model_loaded
@@ -86,7 +125,9 @@ jobs:
           # Первый прогон (пустой кэш) качает веса — отсюда щедрый таймаут.
           for i in $(seq 1 120); do
             if curl -sf http://localhost:9007/health | grep -q '"model_loaded": *true'; then
-              echo "ready after ${i}0s"; exit 0
+              echo "ready after ${i}0s"
+              curl -s http://localhost:9007/health | grep -o '"device": *"[a-z]*"'
+              exit 0
             fi
             sleep 10
           done
@@ -111,36 +152,3 @@ jobs:
       - name: Service logs on failure
         if: failure()
         run: docker logs stt
-
-  # GPU-образ (Dockerfile.cuda): на раннерах нет GPU, поэтому здесь только
-  # проверка, что он собирается на обеих архитектурах, и прогрев кэша слоёв
-  # для релиза. Работоспособность на GPU проверяется вручную (docs/SPARK.md).
-  build-cuda:
-    name: cuda-${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build CUDA image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.cuda
-          platforms: linux/${{ matrix.arch }}
-          push: false
-          build-args: |
-            VERSION=ci-${{ github.sha }}
-            REVISION=${{ github.sha }}
-          cache-from: type=gha,scope=cuda-${{ matrix.arch }}
-          cache-to: type=gha,scope=cuda-${{ matrix.arch }},mode=max
