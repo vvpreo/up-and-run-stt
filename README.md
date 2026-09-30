@@ -137,6 +137,12 @@ If it does not start, the log tells you which of the three usual causes it is:
 - `no kernel image is available for execution on the device` — the GPU is older
   than this CUDA generation supports: switch to `cuda12`.
 
+**What has been verified on real GPUs:** `cuda13` on a DGX Spark (GB10, arm64,
+driver 580) and `cuda12` on a GTX 1050 Ti (amd64, driver 535). `cuda13` on an amd64
+GPU has only been built and run in CPU mode so far; the CI runners have no GPU,
+so every image is tested there with `DEVICE=auto`, which exercises everything
+except the CUDA provider itself. Reports from other cards are welcome.
+
 Measured numbers (DGX Spark GB10 and a GTX 1050 Ti) are in
 [`docs/SPARK_BENCHMARK.md`](docs/SPARK_BENCHMARK.md): on the Spark a 137 s clip
 transcribes in 0.53 s (~260× realtime), a live-dictation phrase takes ~35 ms and
