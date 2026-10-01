@@ -20,6 +20,10 @@ from src.config import SAMPLE_RATE
 logger = logging.getLogger(__name__)
 
 
+class AudioDecodeError(ValueError):
+    """Загруженные байты не являются декодируемым аудио (ошибка клиента -> 400)."""
+
+
 def load_audio_from_file(audio_content: bytes) -> np.ndarray:
     """
     Загружает аудио из байтов и преобразует в numpy array.
@@ -37,7 +41,7 @@ def load_audio_from_file(audio_content: bytes) -> np.ndarray:
         np.ndarray: Аудиоданные в формате float32 с частотой 16kHz.
 
     Raises:
-        Exception: Если аудио не удалось загрузить ни одним из методов.
+        AudioDecodeError: Если аудио не удалось загрузить ни одним из методов.
     """
     audio_buffer = io.BytesIO(audio_content)
 
@@ -89,7 +93,7 @@ def _decode_with_ffmpeg(audio_content: bytes) -> np.ndarray:
     в конце файла из неперематываемого pipe не декодируется.
 
     Raises:
-        RuntimeError: Если ffmpeg не смог декодировать данные.
+        AudioDecodeError: Если ffmpeg не смог декодировать данные.
     """
     with tempfile.NamedTemporaryFile(suffix=".audio") as tmp:
         tmp.write(audio_content)
@@ -104,7 +108,7 @@ def _decode_with_ffmpeg(audio_content: bytes) -> np.ndarray:
     if proc.returncode != 0 or not proc.stdout:
         stderr = proc.stderr.decode(errors="replace").strip().splitlines()
         detail = stderr[-1] if stderr else "unknown error"
-        raise RuntimeError(f"ffmpeg failed to decode audio: {detail}")
+        raise AudioDecodeError(f"ffmpeg failed to decode audio: {detail}")
     return np.frombuffer(proc.stdout, dtype=np.float32).copy()
 
 

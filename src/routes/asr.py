@@ -29,7 +29,7 @@ from src.config import (
 from src.models.schemas import TranscriptionResponse, ConfidenceMetrics
 from src.services.debug import save_debug_log
 from src.services.timeout import TranscriptionTimeoutError, transcribe_with_timeout
-from src.utils.audio import load_audio_from_file
+from src.utils.audio import AudioDecodeError, load_audio_from_file
 from src.utils.formatters import format_srt, format_tsv, format_vtt
 
 if TYPE_CHECKING:
@@ -232,6 +232,10 @@ async def transcribe(
 
     except HTTPException:
         raise
+    except AudioDecodeError as e:
+        # Не аудио / битый файл — ошибка клиента, как у OpenAI (400), а не 500
+        logger.warning(f"Undecodable audio: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Transcription error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

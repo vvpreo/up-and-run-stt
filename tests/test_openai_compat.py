@@ -84,3 +84,18 @@ def test_bracketed_granularities_and_ignored_params(base_url, auth_headers, shor
     data = r.json()
     assert data.get("words"), "words must be present for bracketed granularities"
     assert data.get("usage", {}).get("type") == "duration"
+
+
+@pytest.mark.parametrize("path,field", [("/v1/audio/transcriptions", "file"), ("/stt/asr", "audio_file")])
+def test_undecodable_audio_is_400(base_url, auth_headers, path, field):
+    """Не-аудио (так проверяют соединение GUI-клиенты, напр. VoiceInk) -> 400, а не 500."""
+    r = requests.post(
+        f"{base_url}{path}",
+        headers=auth_headers,
+        files={field: ("probe.wav", bytes(1024), "audio/wav")},
+        data={"model": "v3_e2e_ctc"},
+        timeout=30,
+    )
+    assert r.status_code == 400, r.text
+    if path.startswith("/v1"):
+        assert r.json()["error"]["type"] == "invalid_request_error"

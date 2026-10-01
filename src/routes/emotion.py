@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from src.auth import verify_token
 from src.config import INFERENCE_BACKEND, SAMPLE_RATE
 from src.services.limits import read_upload_limited, request_slot
-from src.utils.audio import load_audio_from_file
+from src.utils.audio import AudioDecodeError, load_audio_from_file
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,10 @@ async def recognize_emotion(
 
     audio_content = await read_upload_limited(audio_file)
     with request_slot():
-        audio = await asyncio.to_thread(load_audio_from_file, audio_content)
+        try:
+            audio = await asyncio.to_thread(load_audio_from_file, audio_content)
+        except AudioDecodeError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         del audio_content
         try:
             probs = await asyncio.to_thread(emo_model.classify, audio)
